@@ -1,0 +1,29 @@
+{
+  "ancilla_success_prob": 0.321044921875,
+  "fidelity": 0.8999999999999999,
+  "classical_solution": [
+    1.125,
+    0.375
+  ],
+  "quantum_solution_abs": [
+    1.0,
+    0.0
+  ],
+  "noisy_ancilla_success_prob": 0.33837890625,
+  "benchmark_measure_4096": {
+    "repeat": 5,
+    "min_ms": 258.5213749999999,
+    "mean_ms": 280.90760020000005,
+    "median_ms": 279.357834,
+    "max_ms": 307.53641700000014,
+    "stdev_ms": 17.960546767971902
+  },
+  "benchmark_statevector": {
+    "repeat": 5,
+    "min_ms": 166.2241670000002,
+    "mean_ms": 223.96653340000006,
+    "median_ms": 174.5372500000002,
+    "max_ms": 343.1392089999998,
+    "stdev_ms": 70.64594544175493
+  }
+}

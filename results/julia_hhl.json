@@ -1,0 +1,20 @@
+{
+  "ancilla_success_prob": 0.5883883476483176,
+  "benchmark_build_run": {
+    "max_ms": 0.130875,
+    "mean_ms": 0.04511574,
+    "median_ms": 0.0430415,
+    "min_ms": 0.042125,
+    "samples": 50,
+    "stdev_ms": 0.012442653614556534
+  },
+  "classical_solution": [
+    1.125,
+    0.37499999999999994
+  ],
+  "fidelity": 0.8999999999999999,
+  "quantum_solution_abs": [
+    1.0,
+    0.0
+  ]
+}
