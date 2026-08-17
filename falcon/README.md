@@ -18,7 +18,7 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 | 6 | `src/ntrugen.jl` | 実装済 / **テスト合格**（`ntru_gen` 含む） |
 | 7 | `src/samplerz.jl` | 実装済 / **テスト合格**（公式 KAT 3072 本） |
 | 8 | `src/ffsampling.jl` | 実装済 / **テスト合格** |
-| 9 | `src/encoding.jl` | 未着手 |
+| 9 | `src/encoding.jl` | 実装済 / **テスト合格**（C 参照実装のバイトと相互運用） |
 | 10 | `src/falcon.jl` | 未着手 |
 
 > **状態**: モジュール 1〜5 について **9672 件のテストが全て合格**している。
@@ -55,6 +55,7 @@ test/           テスト
 scripts/
   gen_vectors.py    golden vector 生成スクリプト（Python 参照実装を使う）
   cref_fft_dump.c   C 参照実装から FFT ベクタを吐くドライバ
+  cref_kat_dump.c   C 参照実装から鍵・署名の KAT を吐くドライバ
   pyref/            Python 参照実装 (tprest/falcon.py, MIT) を vendor したもの
 docs/
   debug_log.md          デバッグ記録（セッションをまたぐ唯一の記憶）

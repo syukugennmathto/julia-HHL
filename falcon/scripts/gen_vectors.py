@@ -807,6 +807,64 @@ def gen_ffsampling():
     write("ffsampling_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 9: signature compression
+# ---------------------------------------------------------------------------
+
+def gen_encoding():
+    from encoding import compress, decompress          # noqa: E402
+
+    lines = []
+    lines.append("# Golomb-Rice signature compression, from the Python reference.")
+    lines.append("# (coefficients, slen, encoded bytes or nothing)")
+    lines.append("const COMPRESS_KAT = Tuple{Vector{Int},Int,Union{Vector{UInt8},Nothing}}[")
+    cases = []
+    # ordinary signature-sized coefficients
+    for n, bound, slen in [(8, 100, 32), (16, 100, 64), (64, 200, 200),
+                           (512, 300, 625), (512, 500, 625)]:
+        cases.append((rand_signed_poly("cmp-%d-%d" % (n, bound), n, bound), slen))
+    # edge cases: zeros, +-1, the -0 boundary, and something that will not fit
+    cases.append(([0] * 16, 32))
+    cases.append(([1, -1, 127, -127, 128, -128, 0, 255], 32))
+    cases.append(([2 ** 12] * 8, 32))          # long unary runs -> does not fit
+    cases.append(([0] * 512, 625))
+    for v, slen in cases:
+        enc = compress(v, slen)
+        if enc is False:
+            lines.append("    (%s, %d, nothing)," % (jl_intvec(v), slen))
+        else:
+            lines.append("    (%s, %d, %s)," % (jl_intvec(v), slen, jl_bytes(enc)))
+    lines.append("]\n")
+
+    # decompression of deliberately invalid encodings must be rejected
+    lines.append("# Encodings the reference rejects: (bytes, slen, n)")
+    lines.append("const DECOMPRESS_INVALID = Tuple{Vector{UInt8},Int,Int}[")
+    bad = []
+    # -0 : sign bit set, seven zero low bits, immediate terminator
+    bad.append((bytes([0b10000000 | 0b0000000, 0b10000000] + [0] * 6), 8, 2))
+    # truncated: not enough bits for the requested number of coefficients
+    bad.append((bytes([0x00]), 1, 4))
+    # trailing garbage after the last coefficient
+    bad.append((bytes([0b00000000, 0b11000000] + [0] * 6), 8, 1))
+    for x, slen, n in bad:
+        # NOTE: the reference's decompress() raises IndexError on an all-zero
+        # encoding instead of rejecting it -- the `while u[-1] == "0"` loop that
+        # strips trailing zeros runs off the front of the string, and it sits
+        # *outside* the try/except that is supposed to catch exactly this.  A
+        # decoder that crashes on attacker-supplied bytes is a bug; ours returns
+        # `nothing`.  See docs/debug_log.md #027.
+        try:
+            got = decompress(x, slen, n)
+        except IndexError:
+            got = False
+        if got is not False:
+            continue                                    # only keep true rejects
+        lines.append("    (%s, %d, %d)," % (jl_bytes(x), slen, n))
+    lines.append("]\n")
+
+    write("encoding_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
@@ -818,6 +876,7 @@ def main():
     gen_samplerz()
     gen_keygen()
     gen_ffsampling()
+    gen_encoding()
 
 
 if __name__ == "__main__":

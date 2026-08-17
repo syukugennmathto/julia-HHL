@@ -72,6 +72,11 @@ export FalconTree, FFLDLNode, FFLDLLeaf
 export gram_fft, ldl_fft, ffldl_fft, normalize_tree!, falcon_tree
 export ffnp_fft, ffsampling_fft, leaf_sigmas, node_l10s, nleaves, treedepth
 
+# --- module 9 --------------------------------------------------------------
+export encode_pubkey, decode_pubkey, encode_privkey, decode_privkey, recover_G
+export compress_sig, decompress_sig, encode_signature, decode_signature
+export MAX_FG_BITS, MAX_FG_BITS_F
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
@@ -80,5 +85,6 @@ include("fft.jl")
 include("ntrugen.jl")
 include("samplerz.jl")
 include("ffsampling.jl")
+include("encoding.jl")
 
 end # module
