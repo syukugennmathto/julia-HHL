@@ -331,12 +331,77 @@ def gen_ntt():
     write("ntt_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 5: the FFT over C
+# ---------------------------------------------------------------------------
+
+def jl_floatvec(v):
+    return "[" + ", ".join(repr(float(x)) for x in v) + "]"
+
+
+def jl_cplxvec(v):
+    return ("ComplexF64[" +
+            ", ".join("complex(%r, %r)" % (float(z.real), float(z.imag)) for z in v) +
+            "]")
+
+
+def gen_fft():
+    from fft import fft, ifft, mul_fft, div_fft, adj_fft   # noqa: E402
+    from fft_constants import roots_dict                   # noqa: E402
+
+    lines = []
+    lines.append("# NOTE ON TOLERANCE: the Python reference's hard-coded root table carries")
+    lines.append("# decimal constants of only ~15 significant digits -- up to about 370 ulp")
+    lines.append("# of error at n = 512.  Our Julia implementation computes its roots with")
+    lines.append("# cispi and is *more* accurate, so these vectors must be compared with a")
+    lines.append("# tolerance, not for equality.  The tight comparison lives in")
+    lines.append("# fft_c_kat.jl, whose oracle is the correctly-rounded C table.")
+    lines.append("")
+
+    lines.append("# roots_dict[n]: the n roots of x^n+1 in C, in the reference's order.")
+    lines.append("const ROOTS_C = Dict{Int,Vector{ComplexF64}}(")
+    for n in sorted(roots_dict):
+        lines.append("    %d => %s," % (n, jl_cplxvec(roots_dict[n])))
+    lines.append(")\n")
+
+    lines.append("# (f, fft(f))")
+    lines.append("const FFT_KAT = Tuple{Vector{Float64},Vector{ComplexF64}}[")
+    cases = []
+    for n, label, bound in [(2, "s2", 10), (4, "s4", 10), (8, "s8", 10),
+                            (16, "s16", 10), (64, "s64", 100),
+                            (512, "s512", 100), (1024, "s1024", 100)]:
+        f = [float(c) for c in rand_signed_poly("fft" + label, n, bound)]
+        cases.append(f)
+        lines.append("    (%s, %s)," % (jl_floatvec(f), jl_cplxvec(fft(f))))
+    lines.append("]\n")
+
+    # Products and adjoints, to pin the FFT-domain operations.
+    lines.append("# (f, g, f*g via FFT, f/g via FFT, adj(f) via FFT) in the coefficient domain")
+    lines.append("const FFT_OPS = " +
+                 "Tuple{Vector{Float64},Vector{Float64},Vector{Float64}," +
+                 "Vector{Float64},Vector{Float64}}[")
+    for n, label in [(8, "o8"), (64, "o64"), (512, "o512")]:
+        f = [float(c) for c in rand_signed_poly("fo" + label + "f", n, 20)]
+        g = [float(c) for c in rand_signed_poly("fo" + label + "g", n, 20)]
+        # keep g away from a near-zero spectrum so the division is well conditioned
+        g[0] += 1000.0
+        lines.append("    (%s, %s, %s, %s, %s)," % (
+            jl_floatvec(f), jl_floatvec(g),
+            jl_floatvec(ifft(mul_fft(fft(f), fft(g)))),
+            jl_floatvec(ifft(div_fft(fft(f), fft(g)))),
+            jl_floatvec(ifft(adj_fft(fft(f))))))
+    lines.append("]\n")
+
+    write("fft_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
     gen_chacha()
     gen_poly()
     gen_ntt()
+    gen_fft()
 
 
 if __name__ == "__main__":

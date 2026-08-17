@@ -52,9 +52,15 @@ export polysplit, polymerge
 export ntt, intt, ntt_roots, ntt_add, ntt_sub, ntt_mul, ntt_div
 export polymulq_ntt, polydivq, is_invertible_zq
 
+# --- module 5 --------------------------------------------------------------
+export fft, ifft, fft_roots, split_fft, merge_fft
+export add_fft, sub_fft, neg_fft, mul_fft, div_fft, adj_fft
+export polymul_fft, polydiv_fft, polyadj_fft
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
 include("ntt.jl")
+include("fft.jl")
 
 end # module

@@ -14,14 +14,14 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 | 2 | `src/shake.jl` | 実装済 / **Julia 未実行** |
 | 3 | `src/poly.jl` | 実装済 / **Julia 未実行** |
 | 4 | `src/ntt.jl` | 実装済 / **Julia 未実行** |
-| 5 | `src/fft.jl` | 未着手 |
+| 5 | `src/fft.jl` | 実装済 / **Julia 未実行**（C 参照実装とは突き合わせ済み） |
 | 6 | `src/ntrugen.jl` | 未着手 |
 | 7 | `src/samplerz.jl` | 未着手 |
 | 8 | `src/ffsampling.jl` | 未着手 |
 | 9 | `src/encoding.jl` | 未着手 |
 | 10 | `src/falcon.jl` | 未着手 |
 
-> **重要**: モジュール 1〜4 を書いたセッションの実行環境には Julia が入って
+> **重要**: モジュール 1〜5 を書いたセッションの実行環境には Julia が入って
 > おらず（`docs/debug_log.md` #001 参照）、**テストは一度も実行されていない**。
 > 期待値（`test/vectors/*.jl`）は参照実装を実際に走らせて生成済みなので信頼できるが、
 > Julia コード側は構文チェックすら通っていない。最初にやることは下記のテスト実行。
@@ -47,9 +47,11 @@ python3 falcon/scripts/gen_vectors.py
 src/            Julia 実装
 test/           テスト
   vectors/      参照実装から生成した golden vector（コミット済み）
+                fft_c_kat.jl だけは **C 参照実装**から生成
 scripts/
-  gen_vectors.py  golden vector 生成スクリプト
-  pyref/          Python 参照実装 (tprest/falcon.py, MIT) を vendor したもの
+  gen_vectors.py    golden vector 生成スクリプト（Python 参照実装を使う）
+  cref_fft_dump.c   C 参照実装から FFT ベクタを吐くドライバ
+  pyref/            Python 参照実装 (tprest/falcon.py, MIT) を vendor したもの
 docs/
   debug_log.md          デバッグ記録（セッションをまたぐ唯一の記憶）
   build_cref_macos.md   C 参照実装を dylib にする手順（macOS / Apple Silicon）

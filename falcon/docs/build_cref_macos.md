@@ -82,43 +82,100 @@ nm -gU libfalcon.dylib | grep falcon_inner_ | head
 
 ---
 
-## 3. 落とし穴: `fpr` は `double` そのものではない
+## 3. 落とし穴 (1): 既定では浮動小数点が**エミュレーション**される
 
-Apple Silicon（`__ARM_FP` が定義される）では、`inner.h:189-201` の分岐により
-`FALCON_FPNATIVE = 1` が選ばれる。このとき `fpr.h:510`:
+> **訂正**: この節の初版には「Apple Silicon では `FALCON_FPNATIVE` が選ばれる」
+> と書いていた。`inner.h:189-201` の既定ロジックだけを見ればそうなるが、
+> **`config.h:87` が `#define FALCON_FPEMU 1` で無条件に上書きしている**ので、
+> 素のままビルドすると**エミュレーション版になる**。実際にビルドして確認済み
+> （`docs/debug_log.md` #012）。`-DFALCON_FPNATIVE=1` を付けても効かない
+> （`config.h` が後勝ち）。
+
+`config.h:64-86` は、その理由を *** CRITICAL SECURITY WARNING *** 付きで
+書いている。要約:
+
+- ネイティブ FPU やコード最適化はわずかな差異を生み、**決定的署名**を壊しうる
+- 署名の非決定性は**壊滅的なセキュリティ障害**につながる。同一メッセージに
+  対する異なる 2 つの署名から、任意メッセージの偽造が可能になりうる
+- したがって `FALCON_FPEMU` を有効のままにすることを**強く推奨**する
+
+つまり FALCON では「Float64 の結果がプラットフォーム間で bit 単位に
+再現すること」自体がセキュリティ性質である。詳細は `docs/math/05_fft.md`。
+
+### 2 つのモードでの `fpr`
+
+| モード | `fpr` の型 | 定義 |
+|:---|:---|:---|
+| `FALCON_FPEMU=1`（既定） | `uint64_t` | `fpr.h:108` |
+| `FALCON_FPNATIVE=1` | `struct { double v; }` | `fpr.h:510` |
+
+**エミュレーション版の `uint64_t` は IEEE-754 binary64 の bit パターン
+そのもの**である（`fpr_gm_tab` の値をデコードして確認済み）。
+だから `ccall` する側では、どちらのモードでも 8 バイトの塊として扱い、
+Julia 側では `Float64` として reinterpret すれば通る。
+
+- **配列として渡す分には両モードとも問題ない。** サイズ 8・アライメント 8 で
+  一致するので、`Ptr{Float64}` で `fpr *` を受ける関数は正しく動く。
+- **スカラを値渡しする関数は注意。** FPNATIVE の
+  `struct { double v; }` は arm64 では HFA として浮動小数点レジスタで渡されるが、
+  規約に寄りかかった書き方になる。値渡し API が要るなら C 側に薄いラッパを:
 
 ```c
-typedef struct { double v; } fpr;
-```
-
-**`double` を包んだ struct** であって `double` ではない。実務上の帰結:
-
-- **配列として渡す分には問題ない。** `struct { double v; }` のメモリ表現は
-  `double` と同一（サイズ 8、アライメント 8）なので、`Ptr{Float64}` で
-  `fpr *` を受ける関数は正しく動く。上の `Zf(FFT)` がこれ。
-- **スカラを値渡しする関数は注意。** arm64 の呼び出し規約では「double 1 個だけの
-  struct」は HFA として浮動小数点レジスタで渡されるので結果的に `Cdouble` と
-  一致するが、規約に寄りかかった書き方になる。値渡し API を叩く必要が出たら、
-  C 側に薄いラッパを 1 本足して `double` で受け渡しするほうが安全:
-
-```c
-/* shim.c -- 突き合わせ専用の薄いラッパ */
+/* shim.c -- 突き合わせ専用 */
 #include "inner.h"
 double shim_fpr_add(double a, double b) {
     fpr x, y, z;
+#if FALCON_FPEMU
+    memcpy(&x, &a, 8); memcpy(&y, &b, 8);
+#else
     x.v = a; y.v = b;
+#endif
     z = fpr_add(x, y);
-    return z.v;
+    double d;
+#if FALCON_FPEMU
+    memcpy(&d, &z, 8);
+#else
+    d = z.v;
+#endif
+    return d;
 }
 ```
 
-- `FALCON_FPEMU=1` でビルドすると `fpr` は `uint64_t`（`fpr.h:108`）になり、
-  浮動小数点演算が整数演算でエミュレートされる。**これは定数時間実装のための
-  ものであり、原稿の主題そのもの**なので、後で `FALCON_FPEMU=1` 版も別名で
-  ビルドして「native FPU 版と bit 単位で一致するか」を見ておく価値がある
-  （仕様が Float64 の丸めまで固定していることの実地確認になる）。
+## 3.5 落とし穴 (2): `fpr_double()` は「double へ変換」ではない
 
----
+```c
+/* fpr.h:682 (FPNATIVE) */
+static inline fpr fpr_double(fpr x) { return FPR(x.v + x.v); }
+```
+
+**2 倍する関数**である。`fpr_half` の対になっている。
+`double` への変換だと思って使うと、ダンプが全部ゼロになるか、
+もっと悪いことに 2 倍された値が返る。実際に踏んだ
+（`docs/debug_log.md` #011）。
+
+## 3.6 落とし穴 (3): FFT の**表現**が違う
+
+`Zf(FFT)` の出力は、我々の（および Python 参照実装の）表現とは違う。
+`inner.h:875-884` にこうある:
+
+> 実多項式は N 個の `fpr` の配列で表現される。実多項式の FFT 表現は
+> **N/2 個の複素要素**を含み、各々は実部・虚部の 2 つの実数として格納される。
+
+つまり:
+
+1. **半分しか持たない。** 実多項式の FFT は共役対称なので後半は冗長。
+2. **実部と虚部を分けて置く。** `n/2` 個の実部の後に `n/2` 個の虚部。
+3. **順序が違う。** 前半 `n/2` 個の中での並びが、我々の並びと
+   **グレイコード置換**でずれている。C の添字 `k` は我々の添字
+   `k XOR (k >> 1)`（0 始まり）に対応する。
+
+3 番目は `inner.h` に書かれていない（"see falcon-fft.c for details" とあるだけ）。
+実際にビルドして n = 4〜1024 で突き合わせて determine した。
+
+Julia 側には `Falcon.from_c_fft` / `Falcon.to_c_fft` として実装済み。
+また、C から取った実際のベクタが `test/vectors/fft_c_kat.jl` にコミットして
+あるので、**dylib をビルドしなくてもモジュール 5 は C と突き合わせ済み**である。
+再生成したい場合のドライバは `scripts/cref_fft_dump.c`。
 
 ## 4. 突き合わせに使える内部関数（`inner.h` の行番号つき）
 
@@ -136,10 +193,15 @@ double shim_fpr_add(double a, double b) {
 | FFT | `Zf(FFT)`, `Zf(iFFT)` | inner.h:892, 902 |
 | FFT 領域演算 | `Zf(poly_add/sub/neg/adj_fft/mul_fft/muladj_fft/mulselfadj_fft)` | inner.h:908-944 |
 
-モジュール 5（`fft.jl`）以降はこの表の関数で 1 対 1 に突き合わせられる。
+**ただし「関数が一覧にある」ことと「そのまま比較できる」ことは別**である
+（3.6 節）。プロトタイプは表現を教えてくれない。実際に突き合わせる前に、
+必ず小さい n で 1 回ダンプして表現を確認すること。
+
 モジュール 3（`poly.jl`）に対応する C 関数が無いのは、参照実装が素朴な畳み込みを
 持っていないから（常に NTT か FFT を使う）。だから**モジュール 3 の突き合わせ相手は
 Python 参照実装**にしてある（`scripts/pyref/ntt.py` の `mul_zq`）。
+モジュール 4（`ntt.jl`）も同様で、C の `Zf(to_ntt_monty)` はビット反転順かつ
+Montgomery 形式なので Python 側を正典にした（`docs/debug_log.md` #007）。
 
 ---
 

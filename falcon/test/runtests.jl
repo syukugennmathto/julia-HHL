@@ -24,6 +24,19 @@ function _evalpoly_c(f::AbstractVector, z::Complex)
     return acc
 end
 
+"""
+Largest absolute difference between two equal-length numeric vectors.
+
+Used everywhere in test_fft.jl: floating-point comparisons need a number, and
+`isapprox` on vectors hides *which* entry drifted when it fails.
+"""
+function _maxabsdiff(a::AbstractVector, b::AbstractVector)
+    length(a) == length(b) ||
+        throw(DimensionMismatch("lengths $(length(a)) and $(length(b))"))
+    isempty(a) && return 0.0
+    return maximum(abs(a[i] - b[i]) for i in eachindex(a))
+end
+
 "Evaluate a polynomial at `x` modulo `m` by Horner."
 function _evalpoly_mod(f::AbstractVector{<:Integer}, x::Integer, m::Integer)
     acc = 0
@@ -44,10 +57,13 @@ include(joinpath(@__DIR__, "vectors", "shake256_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "chacha20_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "poly_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "ntt_kat.jl"))
+include(joinpath(@__DIR__, "vectors", "fft_kat.jl"))
+include(joinpath(@__DIR__, "vectors", "fft_c_kat.jl"))
 
 @testset "Falcon.jl" begin
     include("test_params.jl")   # module 1
     include("test_shake.jl")    # module 2
     include("test_poly.jl")     # module 3
     include("test_ntt.jl")      # module 4
+    include("test_fft.jl")      # module 5
 end
