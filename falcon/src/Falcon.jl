@@ -30,8 +30,8 @@ implementation before the next is started):
 | `encoding.jl`  | key/signature serialisation, Golomb-Rice compression |
 | `falcon.jl`    | `keygen` / `sign` / `verify`                         |
 
-Modules below the horizontal rule are not yet written; see docs/debug_log.md
-for the running state of the project.
+Modules 1-6 are implemented and their tests pass; 7-10 are not yet written.
+See docs/debug_log.md for the running state of the project.
 """
 module Falcon
 
@@ -57,10 +57,16 @@ export fft, ifft, fft_roots, split_fft, merge_fft
 export add_fft, sub_fft, neg_fft, mul_fft, div_fft, adj_fft
 export polymul_fft, polydiv_fft, polyadj_fft
 
+# --- module 6 --------------------------------------------------------------
+export karamul, galois_conjugate, field_norm, lift, bitsize
+export ntru_solve, NTRUSolveFailure, ntru_equation_residual, ntru_equation_holds
+export gs_norm, gs_norm_ok
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
 include("ntt.jl")
 include("fft.jl")
+include("ntrugen.jl")
 
 end # module

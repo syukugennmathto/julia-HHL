@@ -422,6 +422,127 @@ def gen_fft():
     write("fft_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 6: solving the NTRU equation
+# ---------------------------------------------------------------------------
+
+def gen_ntrugen():
+    from ntrugen import (ntru_solve, field_norm, galois_conjugate, lift,
+                         karamul, bitsize, gs_norm)          # noqa: E402
+
+    lines = []
+
+    # --- the tower operations, on small inputs that can be checked by hand ---
+    lines.append("# (a, galois_conjugate(a) = a(-x), field_norm(a), lift(a))")
+    lines.append("const TOWER_OPS = " +
+                 "Tuple{Vector{BigInt},Vector{BigInt},Vector{BigInt},Vector{BigInt}}[")
+    for n, label, bound in [(2, "t2", 5), (4, "t4", 5), (8, "t8", 10),
+                            (16, "t16", 20), (64, "t64", 30)]:
+        a = rand_signed_poly("tow" + label, n, bound)
+        lines.append("    (%s, %s, %s, %s)," % (
+            jl_intvec(a), jl_intvec(galois_conjugate(a)),
+            jl_intvec(field_norm(a)), jl_intvec(lift(a))))
+    lines.append("]\n")
+
+    # --- bitsize: rounded up to a multiple of 8, sign ignored ---
+    lines.append("# (a, bitsize(a)); note bitsize is rounded UP to a multiple of 8")
+    lines.append("const BITSIZE_KAT = Tuple{BigInt,Int}[")
+    vals = [0, 1, -1, 127, 128, 255, 256, -256, 2 ** 53, -(2 ** 53),
+            2 ** 100 + 7, -(2 ** 100 + 7), 2 ** 1000]
+    for v in vals:
+        lines.append("    (%d, %d)," % (v, bitsize(v)))
+    lines.append("]\n")
+
+    # --- full solutions ---
+    # Finding a solvable (f, g) is itself part of key generation: the descent
+    # fails when the bottom-level gcd is not 1, and the reference resamples.
+    # We record the number of attempts so the Julia test can assert that the
+    # *same* attempt succeeds, which pins the failure path too.
+    lines.append("# (f, g, F, G, attempts) with f*G - g*F = q exactly.")
+    lines.append("# `attempts` is how many (f, g) draws from the labelled stream were")
+    lines.append("# rejected with NTRUSolveFailure before this one worked.")
+    lines.append("const NTRU_SOLVE_KAT = " +
+                 "Tuple{Vector{BigInt},Vector{BigInt},Vector{BigInt},Vector{BigInt},Int}[")
+    rejected = []
+    for n, bound in [(2, 5), (4, 5), (8, 6), (16, 6), (32, 6), (64, 6), (128, 6)]:
+        attempt = 0
+        while True:
+            f = rand_signed_poly("nsf%d_%d" % (n, attempt), n, bound)
+            g = rand_signed_poly("nsg%d_%d" % (n, attempt), n, bound)
+            try:
+                F, G = ntru_solve(f, g)
+            except (ValueError, ZeroDivisionError):
+                rejected.append((f, g))
+                attempt += 1
+                if attempt > 200:
+                    raise RuntimeError("no solvable (f,g) found at n=%d" % n)
+                continue
+            break
+        # verify exactly before writing it down
+        r = [x - y for x, y in zip(karamul(f, G), karamul(g, F))]
+        assert r[0] == REF_Q and all(c == 0 for c in r[1:]), \
+            "generator produced a bad NTRU solution at n=%d" % n
+        lines.append("    (%s, %s, %s, %s, %d)," % (
+            jl_intvec(f), jl_intvec(g), jl_intvec(F), jl_intvec(G), attempt))
+        print("  n=%4d solved after %d rejected draw(s)" % (n, attempt))
+    lines.append("]\n")
+
+    # --- an (f, g) for which the descent genuinely fails ---
+    lines.append("# (f, g) pairs whose descent hits gcd != 1: ntru_solve must throw.")
+    lines.append("# These are not contrived -- they are simply the draws that key")
+    lines.append("# generation would reject and resample.")
+    lines.append("const NTRU_SOLVE_FAILS = Tuple{Vector{BigInt},Vector{BigInt}}[")
+    for n, bound in [(2, 5), (4, 5), (8, 6)]:
+        for k in range(500):
+            f = rand_signed_poly("nff%d_%d" % (n, k), n, bound)
+            g = rand_signed_poly("nfg%d_%d" % (n, k), n, bound)
+            try:
+                ntru_solve(f, g)
+            except (ValueError, ZeroDivisionError):
+                lines.append("    (%s, %s)," % (jl_intvec(f), jl_intvec(g)))
+                break
+        else:
+            raise RuntimeError("no failing (f,g) found at n=%d" % n)
+    # plus every draw that the loop above actually rejected -- these are real
+    # rejections from the real generation path, not hunted-for ones.
+    for f, g in rejected:
+        lines.append("    (%s, %s)," % (jl_intvec(f), jl_intvec(g)))
+    lines.append("]\n")
+    print("  recorded %d rejected draw(s) as failure cases" % len(rejected))
+
+    # --- candidate draws at the target dimensions -------------------------
+    # No expected output: the NTRU equation is self-validating, so the Julia
+    # test solves these itself and checks f*G - g*F = q exactly.  That gets us
+    # coverage at n = 256 and 512 without waiting for the Python reference,
+    # which takes minutes there.
+    lines.append("# Candidate (f, g) draws at the target dimensions, with NO expected")
+    lines.append("# output.  The test takes the first draw that does not raise and")
+    lines.append("# verifies the equation exactly -- no oracle needed.")
+    lines.append("const NTRU_SOLVE_CANDIDATES = Tuple{Int,Vector{Vector{BigInt}},Vector{Vector{BigInt}}}[")
+    for n in (256, 512):
+        fs = [rand_signed_poly("cand_f%d_%d" % (n, k), n, 5) for k in range(6)]
+        gs = [rand_signed_poly("cand_g%d_%d" % (n, k), n, 5) for k in range(6)]
+        lines.append("    (%d, [%s], [%s])," % (
+            n,
+            ", ".join(jl_intvec(x) for x in fs),
+            ", ".join(jl_intvec(x) for x in gs)))
+    lines.append("]\n")
+
+    # --- gs_norm ---
+    lines.append("# (f, g, gs_norm(f, g)) -- floating point, compare with a tolerance.")
+    lines.append("const GS_NORM_KAT = Tuple{Vector{Float64},Vector{Float64},Float64}[")
+    for n, bound in [(8, 6), (64, 6), (512, 6)]:
+        f = rand_signed_poly("gsf%d" % n, n, bound)
+        g = rand_signed_poly("gsg%d" % n, n, bound)
+        lines.append("    (%s, %s, %r)," % (
+            jl_floatvec([float(c) for c in f]),
+            jl_floatvec([float(c) for c in g]),
+            float(gs_norm(f, g, REF_Q))))
+    lines.append("]\n")
+
+    write("ntrugen_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
@@ -429,6 +550,7 @@ def main():
     gen_poly()
     gen_ntt()
     gen_fft()
+    gen_ntrugen()
 
 
 if __name__ == "__main__":

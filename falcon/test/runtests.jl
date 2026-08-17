@@ -59,6 +59,7 @@ include(joinpath(@__DIR__, "vectors", "poly_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "ntt_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "fft_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "fft_c_kat.jl"))
+include(joinpath(@__DIR__, "vectors", "ntrugen_kat.jl"))
 
 @testset "Falcon.jl" begin
     include("test_params.jl")   # module 1
@@ -66,4 +67,5 @@ include(joinpath(@__DIR__, "vectors", "fft_c_kat.jl"))
     include("test_poly.jl")     # module 3
     include("test_ntt.jl")      # module 4
     include("test_fft.jl")      # module 5
+    include("test_ntrugen.jl")  # module 6
 end

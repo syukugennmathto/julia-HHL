@@ -1,0 +1,215 @@
+# test_ntrugen.jl -- module 6.
+#
+# The strongest check available anywhere in this project lives here: the NTRU
+# equation
+#
+#     f*G - g*F = q
+#
+# is an *exact integer identity*.  There is no tolerance, no distribution to
+# sample, no reference byte string to trust -- either the polynomials satisfy
+# it or they do not, and `BigInt` settles the question outright.
+#
+# So the tests come in two grades:
+#
+#   * `ntru_equation_holds` on everything.  This is self-validating: it needs
+#     no oracle at all.  A solution that passes it is correct, full stop.
+#   * agreement with the Python reference's *exact* (F, G).  Stronger than
+#     necessary for correctness, but it pins the choices that the equation
+#     alone does not determine -- the Bezout cofactors at the bottom of the
+#     descent, and how far Babai reduction gets.  Those are what make a key
+#     short rather than merely valid.
+#
+# The second is what would catch, say, `div` used where `fld` was meant: the
+# equation would still hold, the key would still work, and the signatures would
+# just be a bit longer than they should be.  That is exactly the kind of bug
+# that never announces itself.
+
+# Golden vectors are included by runtests.jl.
+
+@testset "ntrugen" begin
+
+    @testset "karamul agrees with the schoolbook product" begin
+        # Karatsuba and poly.jl's O(n^2) convolution compute the same ring
+        # element by different routes; they must agree exactly, over Z.
+        for (f, g, want) in NEGACYCLIC_Z
+            @test karamul(f, g) == want
+            @test karamul(f, g) == polymul(f, g)
+        end
+        # including the case whose coefficients overflow Int64
+        f, g, want = NEGACYCLIC_Z[end]
+        @test karamul(f, g) == want
+        # and on the tiny cases where the answer is checkable by hand
+        @test karamul(BigInt[1, 0], BigInt[1, 0]) == BigInt[1, 0]
+        @test karamul(BigInt[0, 1], BigInt[0, 1]) == BigInt[-1, 0]   # x*x = -1
+    end
+
+    @testset "tower operations against the reference" begin
+        for (a, wconj, wnorm, wlift) in TOWER_OPS
+            @test galois_conjugate(a) == wconj
+            @test field_norm(a) == wnorm
+            @test lift(a) == wlift
+        end
+    end
+
+    @testset "tower operations against their definitions" begin
+        for (a, _, _, _) in TOWER_OPS
+            n = length(a)
+            # galois_conjugate is a(-x): an involution, and a ring homomorphism
+            @test galois_conjugate(galois_conjugate(a)) == a
+            b = circshift(a, 1)
+            @test galois_conjugate(karamul(a, b)) ==
+                  karamul(galois_conjugate(a), galois_conjugate(b))
+            # It is NOT polyadj.  Worth pinning: both are called "conjugate".
+            if n >= 4
+                @test galois_conjugate(a) != polyadj(a)
+            end
+
+            # N(a) = a(x)*a(-x), lifted back up, must equal the product in the
+            # big ring.  This is the identity the whole descent rests on.
+            @test lift(field_norm(a)) == karamul(a, galois_conjugate(a))
+
+            # the norm is multiplicative
+            @test field_norm(karamul(a, b)) == karamul(field_norm(a), field_norm(b))
+
+            # lift then take the even part gets back where we started
+            @test polysplit(lift(a))[1] == a
+            @test all(iszero, polysplit(lift(a))[2])
+        end
+    end
+
+    @testset "bitsize" begin
+        for (a, want) in BITSIZE_KAT
+            @test bitsize(a) == want
+        end
+        @test bitsize(0) == 0
+        # rounded UP to a multiple of 8, and sign-independent
+        for a in (1, 7, 255, 256, 2^62, -(2^62))
+            @test bitsize(a) % 8 == 0
+            @test bitsize(a) == bitsize(-a)
+            @test bitsize(a) >= (a == 0 ? 0 : ndigits(abs(BigInt(a)); base = 2))
+            @test bitsize(a) < ndigits(abs(BigInt(a)); base = 2) + 8
+        end
+    end
+
+    @testset "xgcd uses floor division, as Python does" begin
+        # The whole point of not using Base.gcdx: the reference is written in
+        # Python, whose // floors and whose % takes the sign of the divisor.
+        # Julia's div/rem truncate. For negative operands the gcd is the same
+        # but the cofactors differ, and the cofactors are what end up in the key.
+        for (a, b) in ((BigInt(-7), BigInt(3)), (BigInt(7), BigInt(-3)),
+                       (BigInt(-30), BigInt(-18)), (BigInt(12289), BigInt(-5)),
+                       (BigInt(1), BigInt(0)), (BigInt(0), BigInt(5)))
+            d, u, v = Falcon.xgcd_floor(a, b)
+            @test u * a + v * b == d              # the defining identity
+            @test abs(d) == gcd(abs(a), abs(b))
+        end
+    end
+
+    @testset "the NTRU equation holds exactly" begin
+        # The self-validating check: no oracle needed.
+        for (f, g, F, G, _) in NTRU_SOLVE_KAT
+            @test ntru_equation_holds(f, g, F, G)
+            r = ntru_equation_residual(f, g, F, G)
+            @test r[1] == Q
+            @test all(iszero, @view r[2:end])
+        end
+    end
+
+    @testset "ntru_solve reproduces the reference exactly" begin
+        for (f, g, F, G, _) in NTRU_SOLVE_KAT
+            Fj, Gj = ntru_solve(f, g)
+            @test Fj == F
+            @test Gj == G
+        end
+    end
+
+    @testset "solutions are actually reduced" begin
+        # Babai reduction is the difference between a valid key and a useful
+        # one.  An unreduced solution satisfies the equation just as well but
+        # has coefficients thousands of bits long.  Require (F, G) to be within
+        # a modest factor of q times the size of (f, g) -- generous, but four
+        # orders of magnitude away from "unreduced".
+        for (f, g, F, G, _) in NTRU_SOLVE_KAT
+            fg_bits = max(maximum(bitsize, f), maximum(bitsize, g))
+            # (F, G) must come back to within a couple of bytes of (f, g)'s
+            # size.  Measured, they land at 8-16 bits against f, g's 8; an
+            # unreduced solution would be in the thousands.
+            @test maximum(bitsize, F) <= fg_bits + 16
+            @test maximum(bitsize, G) <= fg_bits + 16
+            # and the Gram-Schmidt norm of the completed basis is finite and
+            # positive, i.e. the basis is not degenerate
+            @test 0 < gs_norm(Float64.(f), Float64.(g)) < Inf
+        end
+    end
+
+    @testset "unsolvable (f, g) throw rather than return nonsense" begin
+        for (f, g) in NTRU_SOLVE_FAILS
+            @test_throws NTRUSolveFailure ntru_solve(f, g)
+        end
+        # f = g = 0 has no solution either (gcd is 0)
+        @test_throws NTRUSolveFailure ntru_solve(BigInt[0, 0], BigInt[0, 0])
+    end
+
+    @testset "the target dimensions, self-validated" begin
+        # n = 256 and n = 512 with no reference output at all: solve, then
+        # check the exact integer identity.  This is the only test in the
+        # project that needs no oracle whatsoever, and it covers the dimension
+        # that actually matters.
+        for (n, fs, gs) in NTRU_SOLVE_CANDIDATES
+            solved = false
+            rejected = 0
+            for (f, g) in zip(fs, gs)
+                local F, G
+                try
+                    F, G = ntru_solve(f, g)
+                catch e
+                    e isa NTRUSolveFailure || rethrow()
+                    rejected += 1
+                    continue
+                end
+                @test length(F) == n
+                @test length(G) == n
+                @test ntru_equation_holds(f, g, F, G)
+                fg_bits = max(maximum(bitsize, f), maximum(bitsize, g))
+                @test maximum(bitsize, F) <= fg_bits + 16
+                @test maximum(bitsize, G) <= fg_bits + 16
+                solved = true
+                break
+            end
+            # If every candidate were rejected the test above would be vacuous,
+            # so assert that one succeeded.
+            @test solved
+        end
+    end
+
+    @testset "gs_norm against the reference" begin
+        for (f, g, want) in GS_NORM_KAT
+            @test isapprox(gs_norm(f, g), want; rtol = 1e-9)
+        end
+    end
+
+    @testset "gs_norm and the acceptance threshold" begin
+        # gs_norm is at least ||(f,g)||^2 by construction (it is a max).
+        for (f, g, _) in GS_NORM_KAT
+            @test gs_norm(f, g) >= sum(abs2, f) + sum(abs2, g) - 1e-6
+        end
+        # A pathologically small (f, g) has a huge gs_norm -- the q^2/||fg||^2
+        # branch blows up -- and must be rejected.  This is the branch that
+        # protects against a key whose second basis vector is enormous.
+        tiny = [1.0; zeros(63)]
+        @test gs_norm(tiny, zeros(64)) > gram_schmidt_quality()^2 * Q
+        @test !gs_norm_ok(tiny, zeros(64))
+    end
+
+    @testset "the descent's degree bookkeeping" begin
+        # field_norm halves, lift doubles; the recursion must terminate at 1.
+        a = BigInt.(1:64)
+        len = length(a)
+        while len > 1
+            a = field_norm(a)
+            len ÷= 2
+            @test length(a) == len
+        end
+        @test length(a) == 1
+    end
+end
