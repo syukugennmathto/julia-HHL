@@ -10,21 +10,25 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 
 | # | ファイル | 状態 |
 |---|---|---|
-| 1 | `src/params.jl` | 実装済 / **Julia 未実行** |
-| 2 | `src/shake.jl` | 実装済 / **Julia 未実行** |
-| 3 | `src/poly.jl` | 実装済 / **Julia 未実行** |
-| 4 | `src/ntt.jl` | 実装済 / **Julia 未実行** |
-| 5 | `src/fft.jl` | 実装済 / **Julia 未実行**（C 参照実装とは突き合わせ済み） |
+| 1 | `src/params.jl` | 実装済 / **テスト合格** |
+| 2 | `src/shake.jl` | 実装済 / **テスト合格**（SHAKE256 は自前 Keccak） |
+| 3 | `src/poly.jl` | 実装済 / **テスト合格** |
+| 4 | `src/ntt.jl` | 実装済 / **テスト合格** |
+| 5 | `src/fft.jl` | 実装済 / **テスト合格**（C 参照実装とも突き合わせ済み） |
 | 6 | `src/ntrugen.jl` | 未着手 |
 | 7 | `src/samplerz.jl` | 未着手 |
 | 8 | `src/ffsampling.jl` | 未着手 |
 | 9 | `src/encoding.jl` | 未着手 |
 | 10 | `src/falcon.jl` | 未着手 |
 
-> **重要**: モジュール 1〜5 を書いたセッションの実行環境には Julia が入って
-> おらず（`docs/debug_log.md` #001 参照）、**テストは一度も実行されていない**。
-> 期待値（`test/vectors/*.jl`）は参照実装を実際に走らせて生成済みなので信頼できるが、
-> Julia コード側は構文チェックすら通っていない。最初にやることは下記のテスト実行。
+> **状態**: モジュール 1〜5 について **9672 件のテストが全て合格**している。
+> ただし実行に使ったのは **Julia 1.11.9**（Docker イメージから取り出したもの。
+> 経緯は `docs/debug_log.md` #013）であって、**ユーザ環境の 1.12 ではない**。
+> 1.12 でも一度確認すること。
+>
+> 最初の実行では 16 failed / 21 errored だった。内訳と原因は
+> `docs/debug_log.md` #014〜#019 に全て記録してある。うち 1 件
+> （ChaCha20 のカウンタ溢れ）は**参照実装のほうが間違っていた**。
 
 ## テストの走らせ方
 
@@ -57,6 +61,12 @@ docs/
   build_cref_macos.md   C 参照実装を dylib にする手順（macOS / Apple Silicon）
   math/                 数学的背景（原稿素材）
 ```
+
+## この環境で Julia を入手する方法
+
+julialang.org 系のドメインが塞がれている環境でも、Docker Hub のレジストリ API
+経由で公式イメージから Julia を取り出せる（`docs/debug_log.md` #013）。
+デーモンは不要で、blob は `mirror.gcr.io` から取る。
 
 ## 参照実装
 

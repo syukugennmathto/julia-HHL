@@ -1,8 +1,10 @@
 # test_shake.jl -- module 2.
 #
 # Oracles:
-#   * SHAKE256: CPython's hashlib (a FIPS 202 implementation independent of
-#     SHA.jl), via the vectors in test/vectors/shake256_kat.jl.
+#   * SHAKE256: CPython's hashlib (an independent FIPS 202 implementation),
+#     via the vectors in test/vectors/shake256_kat.jl.  Our Keccak is our own,
+#     so these vectors are the only thing standing between a mistyped rotation
+#     offset and a hash that is wrong but looks perfectly random.
 #   * ChaCha20 PRNG: the Python reference implementation, via
 #     test/vectors/chacha20_kat.jl.
 
@@ -17,13 +19,11 @@
     end
 
     @testset "SHAKE256 prefix property" begin
-        # Our incremental-squeeze wrapper is built on the assumption that
-        # SHAKE256(m, d1) is a prefix of SHAKE256(m, d2) for d1 < d2.  That is
-        # true of the FIPS 202 stream, but SHA.jl re-pads on every digest!
-        # call, so it is an assumption about *their code*, not just about the
-        # standard.  If this testset fails, the fix is to stop using
-        # SHA.shake256 and implement Keccak-f[1600] directly -- do not paper
-        # over it in squeeze!.
+        # SHAKE256(m, d1) must be a prefix of SHAKE256(m, d2) for d1 < d2.
+        # This started life as a check on SHA.jl, whose shake256 re-pads on
+        # every digest! call.  That dependency is gone -- SHA v0.7.0, the
+        # version Julia actually bundles, has no SHAKE at all (debug_log #014)
+        # -- so we now own the sponge and this tests our own squeeze.
         for (msg, d1, d2, expected_long) in SHAKE256_PREFIX
             @test shake256(msg, d2) == expected_long
             @test shake256(msg, d1) == expected_long[1:d1]
@@ -68,6 +68,20 @@
     @testset "XOF argument checking" begin
         x = shake256_xof(UInt8[])
         @test_throws ArgumentError squeeze!(x, -1)
+        # absorbing after squeezing is an error: the padding is already applied
+        y = shake256_xof(UInt8[0x01])
+        squeeze!(y, 1)
+        @test_throws ArgumentError absorb!(y, UInt8[0x02])
+    end
+
+    @testset "absorbing in pieces equals absorbing at once" begin
+        msg = collect(UInt8, 0:250)
+        for cut in (0, 1, 135, 136, 137, 200, 251)
+            x = SHAKE256XOF()
+            absorb!(x, msg[1:cut])
+            absorb!(x, msg[(cut + 1):end])
+            @test squeeze!(x, 64) == shake256(msg, 64)
+        end
     end
 
     @testset "ChaCha20 PRNG against the reference" begin

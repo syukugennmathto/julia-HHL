@@ -10,95 +10,238 @@
 # `samplerz` consumes.  KAT agreement requires reproducing the second one
 # byte-for-byte, including its slightly surprising buffering behaviour.
 
-using SHA
+# ---------------------------------------------------------------------------
+# SHAKE256, implemented here rather than taken from a library
+# ---------------------------------------------------------------------------
+#
+# The first draft of this module used `SHA.shake256`.  That was a mistake made
+# by reading SHA.jl's *master branch* on GitHub instead of the version actually
+# shipped as a stdlib: SHA v0.7.0, which is what Julia 1.11 bundles, exports no
+# SHAKE at all (`isdefined(SHA, :shake256)` is `false`).  See
+# docs/debug_log.md #014.
+#
+# Writing Keccak ourselves costs about ninety lines and buys three things:
+#
+#   1. it works on whatever Julia the reader has, with no dependency whose API
+#      might move underneath us;
+#   2. it gives a *real* incremental squeeze, so the awkward
+#      "regenerate a longer digest and rely on the prefix property" workaround
+#      of the first draft (debug_log #004) disappears entirely;
+#   3. the round constants and rotation offsets can be **generated from their
+#      definitions** rather than transcribed from a table.  That is the same
+#      discipline params.jl applies to the FALCON constants, and it matters
+#      more here: a mistyped rotation offset produces a hash that is wrong but
+#      looks perfectly random, so only a KAT would ever catch it.
+#
+# CONSTANT TIME: Keccak is branch-free and table-free by construction, so this
+# is constant time without effort.  As in the ChaCha20 note below, the
+# side-channel difficulty in FALCON is downstream, in samplerz and ffsampling.
 
-# ===========================================================================
-# SHAKE256 as an XOF
-# ===========================================================================
-#
-# The awkwardness here is worth explaining, because it is a real limitation of
-# the tooling rather than of FALCON.
-#
-# Keccak-based XOFs are naturally *incremental*: you absorb the message, pad
-# once, and then squeeze as many output blocks as you like, the state evolving
-# as you go.  `SHA.jl` does not expose that: its `shake256(data, d)` takes the
-# whole message and a fixed output length `d`, and `digest!` re-applies the
-# padding every time it is called, so a context cannot be squeezed twice.
-#
-# What saves us is the defining property of a XOF stream: for `d1 < d2`,
-# `SHAKE256(m, d1)` is a *prefix* of `SHAKE256(m, d2)`.  So an incremental
-# squeeze can be emulated by keeping the absorbed message around and, whenever
-# more output is wanted than we have, recomputing a longer digest from scratch.
-# We grow the buffer by doubling, so a sequence of small squeezes totalling `N`
-# bytes costs O(N) Keccak permutations amortised, not O(N^2) -- but each
-# individual regeneration re-absorbs the message, so the true bound is
-# O(N + |m| log N).  For FALCON's message sizes that is irrelevant.
-#
-# The prefix property is an assumption about `SHA.jl`, not just about FIPS 202,
-# so `test/test_shake.jl` checks it explicitly against CPython's `hashlib`
-# rather than taking it on faith.
-#
-# CONSTANT TIME: not an issue here.  SHAKE256 is applied to public data (the
-# salt and the message), and the ChaCha20 PRNG below is a stream cipher whose
-# reference implementation is already constant time by construction.  The
-# side-channel difficulty in FALCON lives downstream, in `samplerz` and
-# `ffsampling`, not here.
+"The rate of SHAKE256 in bytes: 200 - 2*32 = 136."
+const SHAKE256_RATE = 136
+
+"""
+    _keccak_round_constants() -> Vector{UInt64}
+
+The 24 round constants of Keccak-f[1600], generated from the LFSR definition
+in FIPS 202 rather than copied from a table.
+
+`rc(t)` is bit `t mod 255` of the sequence produced by the LFSR with feedback
+polynomial `x^8 + x^6 + x^5 + x^4 + 1`; round constant `i` has bit
+`2^j - 1` set to `rc(j + 7i)` for `j = 0..6`.
+"""
+function _keccak_round_constants()
+    rc = Vector{UInt64}(undef, 24)
+    # NOTE the type: this must be wider than 8 bits.  Written as `0x01` it is a
+    # UInt8, `lfsr <<= 1` silently drops the bit we are about to test for, the
+    # feedback never fires, and every round constant comes out wrong -- while
+    # still looking like plausible random-ish values.  debug_log #015.
+    lfsr = 1
+    for i in 1:24
+        c = UInt64(0)
+        for j in 0:6
+            bit = lfsr & 0x01
+            # advance: shift left, and reduce by the feedback polynomial
+            lfsr <<= 1
+            if (lfsr & 0x100) != 0
+                lfsr = (lfsr ⊻ 0x71) & 0xff
+            end
+            if bit != 0
+                c |= UInt64(1) << ((1 << j) - 1)
+            end
+        end
+        rc[i] = c
+    end
+    return rc
+end
+
+"""
+    _keccak_rho_pi() -> (Vector{Int}, Vector{Int})
+
+Rotation offsets and the pi permutation, generated from their definitions.
+
+Lanes are indexed `x + 5y + 1` (1-based).  Starting from `(x, y) = (1, 0)`, the
+walk `(x, y) <- (y, 2x + 3y mod 5)` visits the 24 non-origin lanes, and at step
+`t` the offset is the triangular number `(t+1)(t+2)/2 mod 64`.  The same walk
+defines pi.
+"""
+function _keccak_rho_pi()
+    rot = zeros(Int, 25)
+    x, y = 1, 0
+    for t in 0:23
+        rot[x + 5y + 1] = ((t + 1) * (t + 2) ÷ 2) % 64
+        x, y = y, (2x + 3y) % 5
+    end
+    # pi: the lane at (x, y) moves to (y, 2x + 3y).
+    piperm = zeros(Int, 25)
+    for yy in 0:4, xx in 0:4
+        piperm[yy + 5 * ((2xx + 3yy) % 5) + 1] = xx + 5yy + 1
+    end
+    return (rot, piperm)
+end
+
+const _KECCAK_RC = _keccak_round_constants()
+const _KECCAK_ROT, _KECCAK_PI = _keccak_rho_pi()
+
+"""
+    _keccak_f1600!(A)
+
+The Keccak-f[1600] permutation, in place, on 25 `UInt64` lanes.
+"""
+function _keccak_f1600!(A::Vector{UInt64})
+    C = Vector{UInt64}(undef, 5)
+    B = Vector{UInt64}(undef, 25)
+    @inbounds for round in 1:24
+        # theta
+        for x in 1:5
+            C[x] = A[x] ⊻ A[x + 5] ⊻ A[x + 10] ⊻ A[x + 15] ⊻ A[x + 20]
+        end
+        for x in 1:5
+            d = C[mod1(x - 1, 5)] ⊻ bitrotate(C[mod1(x + 1, 5)], 1)
+            for y in 0:4
+                A[x + 5y] ⊻= d
+            end
+        end
+        # rho and pi
+        for i in 1:25
+            B[i] = bitrotate(A[_KECCAK_PI[i]], _KECCAK_ROT[_KECCAK_PI[i]])
+        end
+        # chi
+        for y in 0:4, x in 1:5
+            A[x + 5y] = B[x + 5y] ⊻ ((~B[mod1(x + 1, 5) + 5y]) & B[mod1(x + 2, 5) + 5y])
+        end
+        # iota
+        A[1] ⊻= _KECCAK_RC[round]
+    end
+    return A
+end
 
 """
     SHAKE256XOF
 
-An incremental-squeeze view of SHAKE256, built on `SHA.shake256`.
-
-Construct with [`shake256_xof`](@ref), then draw bytes with
-[`squeeze!`](@ref).  Absorption is one-shot: the whole message must be given
-at construction time.
+An incremental SHAKE256 sponge: absorb with [`absorb!`](@ref), then draw output
+with [`squeeze!`](@ref).  Once squeezing has begun, further absorption is an
+error -- padding has already been applied and the sponge cannot go back.
 """
 mutable struct SHAKE256XOF
-    "the absorbed message"
-    msg::Vector{UInt8}
-    "the output stream generated so far"
+    "the 1600-bit state, as 25 lanes"
+    state::Vector{UInt64}
+    "bytes absorbed into the current block but not yet permuted"
     buf::Vector{UInt8}
-    "number of bytes of `buf` already handed out"
+    "how many bytes of `buf` are in use (absorbing) or consumed (squeezing)"
     pos::Int
+    "false while absorbing, true once padded"
+    squeezing::Bool
 end
 
-"""
-    shake256_xof(msg...) -> SHAKE256XOF
+SHAKE256XOF() = SHAKE256XOF(zeros(UInt64, 25), zeros(UInt8, SHAKE256_RATE), 0, false)
 
-Absorb the concatenation of `msg` (each element a byte vector or a `String`)
-and return a XOF ready to be squeezed.
+"""
+    shake256_xof(parts...) -> SHAKE256XOF
+
+Absorb the concatenation of `parts` (byte vectors or `String`s) and return a
+sponge ready to be squeezed.
 
 The variadic form exists because FALCON always hashes a *concatenation*
 (typically `salt || message`), and building that concatenation at every call
 site is where an off-by-one in the domain separation likes to hide.
 """
 function shake256_xof(parts...)
-    msg = UInt8[]
+    x = SHAKE256XOF()
     for p in parts
-        append!(msg, _as_bytes(p))
+        absorb!(x, _as_bytes(p))
     end
-    return SHAKE256XOF(msg, UInt8[], 0)
+    return x
 end
 
 _as_bytes(x::AbstractVector{UInt8}) = x
 _as_bytes(x::AbstractString) = codeunits(x)
 
+# XOR one byte into the sponge state at byte offset `i` (0-based).
+@inline function _xor_byte!(state::Vector{UInt64}, i::Int, b::UInt8)
+    lane = (i >> 3) + 1
+    shift = (i & 7) << 3
+    @inbounds state[lane] ⊻= UInt64(b) << shift
+    return nothing
+end
+
+@inline function _get_byte(state::Vector{UInt64}, i::Int)
+    lane = (i >> 3) + 1
+    shift = (i & 7) << 3
+    @inbounds return UInt8((state[lane] >> shift) & 0xff)
+end
+
+"""
+    absorb!(xof, data)
+
+Absorb more input.  Errors if the sponge has already been squeezed.
+"""
+function absorb!(x::SHAKE256XOF, data)
+    x.squeezing && throw(ArgumentError(
+        "cannot absorb into a SHAKE256 sponge that has already been squeezed"))
+    bytes = _as_bytes(data)
+    for b in bytes
+        _xor_byte!(x.state, x.pos, b)
+        x.pos += 1
+        if x.pos == SHAKE256_RATE
+            _keccak_f1600!(x.state)
+            x.pos = 0
+        end
+    end
+    return x
+end
+
+# Apply the SHAKE padding (0x1f ... 0x80) and switch to squeezing.
+function _finalize!(x::SHAKE256XOF)
+    _xor_byte!(x.state, x.pos, 0x1f)
+    _xor_byte!(x.state, SHAKE256_RATE - 1, 0x80)
+    _keccak_f1600!(x.state)
+    x.squeezing = true
+    x.pos = 0
+    return nothing
+end
+
 """
     squeeze!(xof, n) -> Vector{UInt8}
 
-Return the next `n` bytes of the XOF output stream and advance the position.
+Return the next `n` bytes of output, permuting the state as needed.
+
+Unlike the first draft of this module, this is a genuine incremental squeeze:
+the sponge state advances, nothing is recomputed, and squeezing `n` bytes in
+any sequence of chunks gives the same stream.
 """
-function squeeze!(xof::SHAKE256XOF, n::Integer)
+function squeeze!(x::SHAKE256XOF, n::Integer)
     n >= 0 || throw(ArgumentError("cannot squeeze a negative number of bytes"))
-    need = xof.pos + n
-    if need > length(xof.buf)
-        # Grow by doubling, with a floor so the very first squeeze does not
-        # cost a regeneration immediately afterwards.
-        newlen = max(need, 2 * length(xof.buf), 64)
-        xof.buf = SHA.shake256(xof.msg, UInt(newlen))
+    x.squeezing || _finalize!(x)
+    out = Vector{UInt8}(undef, n)
+    for k in 1:n
+        if x.pos == SHAKE256_RATE
+            _keccak_f1600!(x.state)
+            x.pos = 0
+        end
+        out[k] = _get_byte(x.state, x.pos)
+        x.pos += 1
     end
-    out = xof.buf[(xof.pos + 1):(xof.pos + n)]
-    xof.pos += n
     return out
 end
 
@@ -106,11 +249,8 @@ end
     shake256(data, outlen) -> Vector{UInt8}
 
 One-shot SHAKE256 with `outlen` bytes of output.
-
-A thin wrapper over `SHA.shake256` whose only jobs are to accept a plain
-`Int` length (`SHA.shake256` insists on `UInt`) and to accept `String` input.
 """
-shake256(data, outlen::Integer) = SHA.shake256(_as_bytes(data), UInt(outlen))
+shake256(data, outlen::Integer) = squeeze!(shake256_xof(data), outlen)
 
 # ===========================================================================
 # The ChaCha20 PRNG of the reference implementation

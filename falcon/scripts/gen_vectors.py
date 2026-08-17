@@ -38,7 +38,25 @@ sys.path.insert(0, os.path.join(HERE, "pyref"))
 
 from common import q as REF_Q            # noqa: E402
 from ntt import mul_zq, div_zq, add_zq, sub_zq  # noqa: E402
-from rng import ChaCha20                 # noqa: E402
+from rng import ChaCha20 as _RefChaCha20  # noqa: E402
+
+
+class ChaCha20(_RefChaCha20):
+    """The reference PRNG with a *64-bit* block counter.
+
+    The vendored Python reference keeps its counter in a Python int, which
+    never wraps.  The C reference holds it in a `uint64_t` (`rng.c`,
+    `prng_refill`: `cc = *(uint64_t *)(p->state.d + 48); ... cc + 8`), so it
+    wraps modulo 2**64.  The two agree until the counter overflows, which a
+    seed of all-0xff bytes does immediately -- and then the Python version
+    starts XORing a 33-bit value into a 32-bit state word and diverges.
+
+    The C reference is normative, so we mask.  See docs/debug_log.md #016.
+    """
+
+    def update(self):
+        self.ctr &= (1 << 64) - 1
+        return super().update()
 
 OUT = os.path.join(ROOT, "test", "vectors")
 
@@ -112,10 +130,10 @@ def gen_shake():
         lines.append("    (%s, %d, %s)," % (jl_bytes(msg), dlen, jl_bytes(out)))
     lines.append("]\n")
 
-    # The prefix property is what our incremental-squeeze wrapper is built on:
-    # SHAKE256(m, d1) must be a prefix of SHAKE256(m, d2) for d1 < d2.
-    # SHA.jl re-pads on every digest! call, so we verify this explicitly rather
-    # than assume it.
+    # The prefix property: SHAKE256(m, d1) must be a prefix of SHAKE256(m, d2)
+    # for d1 < d2.  This was load-bearing when the module was built on
+    # SHA.shake256; now that we implement the sponge ourselves it is a property
+    # of our own incremental squeeze, which is exactly as worth testing.
     lines.append("# prefix property: (input, short length, long length, expected long output)")
     lines.append("const SHAKE256_PREFIX = Tuple{Vector{UInt8},Int,Int,Vector{UInt8}}[")
     for msg, d1, d2 in [(b"", 8, 300), (b"falcon", 31, 32), (b"falcon", 136, 137),
@@ -199,11 +217,20 @@ def gen_poly():
         g = rand_signed_poly(label + "g", n, half)
         lines.append("    (%s, %s, %s)," %
                      (jl_intvec(f), jl_intvec(g), jl_intvec(negacyclic_mul_Z(f, g))))
-    # A case with deliberately large coefficients: the product overflows Int64
-    # if you are careless, which is exactly the trap that bites in ntrugen.jl.
-    big = 10 ** 9
+    # A case with deliberately large coefficients: the product must overflow
+    # Int64, which is exactly the trap that bites in ntrugen.jl.
+    #
+    # The first version of this fixture used a bound of 1e9 and did NOT
+    # overflow: random signs cancel, so the largest product coefficient came
+    # out at 5.8e18, just under typemax(Int64) = 9.2e18.  The test asserting
+    # that Int64 raises therefore failed against correct code.  Hence the
+    # bigger bound *and* the assertion below, so the fixture cannot quietly
+    # weaken again.  See docs/debug_log.md #017.
+    big = 10 ** 10
     f = rand_signed_poly("zbigf", 64, big)
     g = rand_signed_poly("zbigg", 64, big)
+    assert max(abs(c) for c in negacyclic_mul_Z(f, g)) > 2 ** 63 - 1, \
+        "the overflow fixture must actually overflow Int64"
     lines.append("    (%s, %s, %s)," %
                  (jl_intvec(f), jl_intvec(g), jl_intvec(negacyclic_mul_Z(f, g))))
     lines.append("]\n")

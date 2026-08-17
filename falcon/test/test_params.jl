@@ -81,7 +81,11 @@
             @test p.sigma_min < p.sigma_max
             @test p.sigma_max == 1.8205
             # The lattice width is far larger than the per-coefficient widths.
-            @test p.sigma > 100 * p.sigma_max
+            # (The ratio is about 91 at both degrees.  The first version of
+            # this test asserted > 100 * sigma_max, which is simply false --
+            # a wrong test, not a wrong constant.  debug_log #018.)
+            @test p.sigma > 50 * p.sigma_max
+            @test 80 < p.sigma / p.sigma_max < 100
             # f, g are much narrower than the signature Gaussian.
             @test p.sigma_fg < p.sigma
         end

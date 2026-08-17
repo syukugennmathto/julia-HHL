@@ -40,7 +40,7 @@ export FalconParams, FALCON_512, FALCON_1024, params, Q, HEAD_LEN, SALT_LEN, SEE
 export SIGMA_FG_BASE, smoothing_eta, falcon_eps, gram_schmidt_quality
 
 # --- module 2 --------------------------------------------------------------
-export SHAKE256XOF, shake256_xof, squeeze!, shake256
+export SHAKE256XOF, shake256_xof, absorb!, squeeze!, shake256
 export ChaCha20, chacha20, randombytes!
 
 # --- module 3 --------------------------------------------------------------
