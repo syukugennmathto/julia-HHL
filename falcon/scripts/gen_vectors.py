@@ -618,6 +618,77 @@ def gen_samplerz():
     write("samplerz_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 6b: key generation (needs module 7's sampler, so it comes last)
+# ---------------------------------------------------------------------------
+
+def gen_keygen():
+    import ntrugen                                   # noqa: E402
+    from ntrugen import gs_norm, karamul             # noqa: E402
+
+    lines = []
+    lines.append("# Key generation.  The random stream is derived from a short label so")
+    lines.append("# that it need not be embedded: both sides compute")
+    lines.append("#     shake256(codeunits(label), nbytes)")
+    lines.append("# and our SHAKE256 is already checked against hashlib (module 2).")
+    lines.append("#")
+    lines.append("# gen_poly draws 4096 samples regardless of n and folds them in blocks")
+    lines.append("# of 4096/n; the byte counts below pin that, since drawing n samples")
+    lines.append("# directly would give the same distribution and a different stream.")
+    lines.append("")
+
+    orig = ntrugen.samplerz
+
+    def patched_stream(label, nbytes):
+        # NOTE: the emitted label is the FULL seed string, prefix included, so
+        # the Julia side derives the stream from exactly what it is given and
+        # cannot get the domain separation subtly wrong.
+        raw = hashlib.shake_256(label.encode()).digest(nbytes)
+        pos = [0]
+
+        def rb(k):
+            out = raw[pos[0]:pos[0] + k]
+            if len(out) != k:
+                raise IndexError("probe stream exhausted")
+            pos[0] += k
+            return out
+
+        return rb, pos
+
+    lines.append("# (n, stream label, bytes consumed, f)")
+    lines.append("const GEN_POLY_KAT = Tuple{Int,String,Int,Vector{BigInt}}[")
+    for n in (8, 16, 64, 512, 1024):
+        label = "falcon-jl/keygen/genpoly-%d" % n
+        rb, pos = patched_stream(label, 2_000_000)
+        ntrugen.samplerz = lambda mu, s, smin, _rb=rb: orig(mu, s, smin, randombytes=_rb)
+        f = ntrugen.gen_poly(n)
+        lines.append('    (%d, "%s", %d, %s),' % (n, label, pos[0], jl_intvec(f)))
+        print("  gen_poly n=%4d consumed %d bytes" % (n, pos[0]))
+    lines.append("]\n")
+
+    lines.append("# (n, stream label, bytes consumed, f, g, F, G) -- full key generation.")
+    lines.append("# Only small n: the Python reference's ntru_solve is minutes at n=512,")
+    lines.append("# and the NTRU equation is self-validating anyway, so the Julia test")
+    lines.append("# runs the target dimension itself without an oracle.")
+    lines.append("const NTRU_GEN_KAT = " +
+                 "Tuple{Int,String,Int,Vector{BigInt},Vector{BigInt},Vector{BigInt},Vector{BigInt}}[")
+    for n in (8, 16, 32):
+        label = "falcon-jl/keygen/ntrugen-%d" % n
+        rb, pos = patched_stream(label, 8_000_000)
+        ntrugen.samplerz = lambda mu, s, smin, _rb=rb: orig(mu, s, smin, randombytes=_rb)
+        f, g, F, G = ntrugen.ntru_gen(n)
+        r = [x - y for x, y in zip(karamul(f, G), karamul(g, F))]
+        assert r[0] == REF_Q and all(c == 0 for c in r[1:]), "bad key at n=%d" % n
+        lines.append('    (%d, "%s", %d, %s, %s, %s, %s),' % (
+            n, label, pos[0],
+            jl_intvec(f), jl_intvec(g), jl_intvec(F), jl_intvec(G)))
+        print("  ntru_gen n=%4d consumed %d bytes" % (n, pos[0]))
+    lines.append("]\n")
+
+    ntrugen.samplerz = orig
+    write("keygen_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
@@ -627,6 +698,7 @@ def main():
     gen_fft()
     gen_ntrugen()
     gen_samplerz()
+    gen_keygen()
 
 
 if __name__ == "__main__":

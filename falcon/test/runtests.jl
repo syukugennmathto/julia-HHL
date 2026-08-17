@@ -61,6 +61,7 @@ include(joinpath(@__DIR__, "vectors", "fft_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "fft_c_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "ntrugen_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "samplerz_kat.jl"))
+include(joinpath(@__DIR__, "vectors", "keygen_kat.jl"))
 
 @testset "Falcon.jl" begin
     include("test_params.jl")   # module 1
@@ -70,4 +71,5 @@ include(joinpath(@__DIR__, "vectors", "samplerz_kat.jl"))
     include("test_fft.jl")      # module 5
     include("test_ntrugen.jl")  # module 6
     include("test_samplerz.jl") # module 7
+    include("test_keygen.jl")   # module 6 + 7: key generation
 end

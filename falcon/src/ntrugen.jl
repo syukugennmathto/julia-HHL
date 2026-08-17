@@ -499,3 +499,123 @@ The key-generation acceptance test: `||B~||^2 <= 1.17^2 * q`.
 """
 gs_norm_ok(f, g; q::Integer = Q) =
     gs_norm(f, g; q = q) <= gram_schmidt_quality()^2 * q
+
+# ---------------------------------------------------------------------------
+# Key generation proper
+# ---------------------------------------------------------------------------
+#
+# This is the entry point that ties module 6 to module 7: sample (f, g) from a
+# Gaussian, test them, and complete them to a basis.  It lives here rather than
+# in samplerz.jl because the interesting part is the *rejection*, not the
+# sampling.
+
+"""
+    SIGMA_FG_MIN
+
+The `sigmin` argument key generation passes to `samplerz`: `SIGMA_FG_BASE -
+0.001`.
+
+[Py-ref] scripts/pyref/ntrugen.py:211 (`samplerz(0, sigma, sigma - 0.001)`)
+
+Not a derived quantity -- it is simply "a hair below sigma", chosen so that the
+`sigmin < sigma` precondition of `samplerz` holds with room to spare.  Written
+out because a reimplementation that passes `sigma` itself, or `sigma_min` from
+the parameter set, would still produce a plausible Gaussian and a different
+byte stream.
+"""
+const SIGMA_FG_MIN = SIGMA_FG_BASE - 0.001
+
+"""
+    gen_poly(n, randombytes) -> Vector{BigInt}
+
+Sample a degree-`n` polynomial whose coefficients follow `D_{Z, 0, sigma_fg}`
+with `sigma_fg = 1.17 * sqrt(q / (2n))`.
+
+[Py-ref] scripts/pyref/ntrugen.py:204-217
+
+## Why 4096 samples regardless of n
+
+The reference always draws **4096** samples at the fixed width
+`SIGMA_FG_BASE = 1.43300980528773`, then folds them in consecutive blocks of
+`k = 4096/n`.  Summing `k` independent Gaussians of width `s` gives width
+`sqrt(k)*s`, which works out to exactly `sigma_fg`.
+
+Drawing `n` coefficients directly at `sigma_fg` would give the *same
+distribution* and a *different byte stream*, so it would pass every statistical
+test and fail every KAT.  This is the same class of trap as the reversed KAT
+chunks of module 7: a change that is invisible to the mathematics and fatal to
+reproducibility.
+
+It also means key generation consumes randomness for 8192 `samplerz` calls
+before it has even looked at the result -- at n = 512 the sampling dominates
+everything except `ntru_solve`.
+"""
+function gen_poly(n::Integer, randombytes)
+    n < 4096 || throw(ArgumentError("gen_poly requires n < 4096, got $n"))
+    4096 % n == 0 || throw(ArgumentError("gen_poly requires n | 4096, got $n"))
+    f0 = Vector{Int}(undef, 4096)
+    @inbounds for i in 1:4096
+        f0[i] = samplerz(0.0, SIGMA_FG_BASE, SIGMA_FG_MIN, randombytes)
+    end
+    k = 4096 ÷ n
+    f = Vector{BigInt}(undef, n)
+    @inbounds for i in 1:n
+        acc = 0
+        for j in 1:k
+            acc += f0[(i - 1) * k + j]
+        end
+        f[i] = acc
+    end
+    return f
+end
+
+"""
+    ntru_gen(n, randombytes; q = Q, max_attempts = 1000) -> (f, g, F, G)
+
+Generate a complete FALCON private basis: sample `(f, g)`, reject until they
+are good, and solve for `(F, G)`.
+
+Corresponds to `NTRUGen` of the specification.
+[Py-ref] scripts/pyref/ntrugen.py:220-245
+
+## The three rejection conditions, in the reference's order
+
+1. **`gs_norm(f, g) > 1.17^2 * q`** -- the basis would be too long, so the
+   signature width `sigma` would not be achievable.  This is the condition that
+   makes `1.17` appear in three places at once (params.jl).
+2. **`f` not invertible mod q** -- then `h = g/f` does not exist and there is
+   no public key.  Cheap to test: no NTT coefficient may vanish (ntt.jl).
+3. **`ntru_solve` fails** -- the bottom-level gcd is not 1, so the equation has
+   no solution at all.
+
+None of the three consumes randomness, so their order does not affect the byte
+stream; it is kept as the reference has it for legibility.
+
+`max_attempts` is a guard against an infinite loop on a broken sampler; the
+reference has no such bound. Hitting it is a bug, not bad luck: measured
+acceptance is roughly one draw in three.
+
+CONSTANT TIME: key generation is the one part of FALCON where variable time is
+broadly accepted -- it runs once, and its timing does not correlate with any
+per-message secret. The rejection loop above is proudly data-dependent.
+"""
+function ntru_gen(n::Integer, randombytes; q::Integer = Q, max_attempts::Integer = 1000)
+    for _ in 1:max_attempts
+        f = gen_poly(n, randombytes)
+        g = gen_poly(n, randombytes)
+
+        gs_norm(Float64.(f), Float64.(g); q = q) > gram_schmidt_quality()^2 * q && continue
+        is_invertible_zq(Int.(f)) || continue
+
+        try
+            F, G = ntru_solve(f, g; q = q)
+            return (f, g, F, G)
+        catch e
+            e isa NTRUSolveFailure || rethrow()
+            continue
+        end
+    end
+    throw(ErrorException(
+        "ntru_gen: no acceptable (f, g) in $max_attempts attempts -- " *
+        "this indicates a broken sampler, not bad luck"))
+end

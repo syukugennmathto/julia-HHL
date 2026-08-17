@@ -60,7 +60,7 @@ export polymul_fft, polydiv_fft, polyadj_fft
 # --- module 6 --------------------------------------------------------------
 export karamul, galois_conjugate, field_norm, lift, bitsize
 export ntru_solve, NTRUSolveFailure, ntru_equation_residual, ntru_equation_holds
-export gs_norm, gs_norm_ok
+export gs_norm, gs_norm_ok, gen_poly, ntru_gen, SIGMA_FG_MIN
 
 # --- module 7 --------------------------------------------------------------
 export samplerz, basesampler, approxexp, berexp
