@@ -48,8 +48,13 @@ export polyadd, polysub, polyneg, polymul, polyadj, sqnorm
 export polyaddq, polysubq, polymulq, centered
 export polysplit, polymerge
 
+# --- module 4 --------------------------------------------------------------
+export ntt, intt, ntt_roots, ntt_add, ntt_sub, ntt_mul, ntt_div
+export polymulq_ntt, polydivq, is_invertible_zq
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
+include("ntt.jl")
 
 end # module

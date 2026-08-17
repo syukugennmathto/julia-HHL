@@ -13,7 +13,7 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 | 1 | `src/params.jl` | 実装済 / **Julia 未実行** |
 | 2 | `src/shake.jl` | 実装済 / **Julia 未実行** |
 | 3 | `src/poly.jl` | 実装済 / **Julia 未実行** |
-| 4 | `src/ntt.jl` | 未着手 |
+| 4 | `src/ntt.jl` | 実装済 / **Julia 未実行** |
 | 5 | `src/fft.jl` | 未着手 |
 | 6 | `src/ntrugen.jl` | 未着手 |
 | 7 | `src/samplerz.jl` | 未着手 |
@@ -21,7 +21,7 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 | 9 | `src/encoding.jl` | 未着手 |
 | 10 | `src/falcon.jl` | 未着手 |
 
-> **重要**: モジュール 1〜3 を書いたセッションの実行環境には Julia が入って
+> **重要**: モジュール 1〜4 を書いたセッションの実行環境には Julia が入って
 > おらず（`docs/debug_log.md` #001 参照）、**テストは一度も実行されていない**。
 > 期待値（`test/vectors/*.jl`）は参照実装を実際に走らせて生成済みなので信頼できるが、
 > Julia コード側は構文チェックすら通っていない。最初にやることは下記のテスト実行。

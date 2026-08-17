@@ -263,11 +263,80 @@ def gen_poly():
     write("poly_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 4: the NTT over Z_q
+# ---------------------------------------------------------------------------
+
+def gen_ntt():
+    from ntt import ntt, intt, mul_ntt, div_ntt          # noqa: E402
+    from ntt_constants import roots_dict_Zq              # noqa: E402
+
+    lines = []
+
+    # The root tables.  Our Julia implementation *generates* these from a
+    # primitive 2048-th root of unity rather than hard-coding 2046 numbers, so
+    # these vectors are what certifies that the generation reproduces the
+    # reference's ordering exactly -- and the ordering is not incidental, it is
+    # what makes split_ntt/merge_ntt line up with the FFT tree.
+    lines.append("# roots_dict_Zq[n] = the n roots of x^n + 1 mod q, in the")
+    lines.append("# reference's recursive order.  Oracle: scripts/pyref/ntt_constants.py")
+    lines.append("const ROOTS_ZQ = Dict{Int,Vector{Int}}(")
+    for n in sorted(roots_dict_Zq):
+        lines.append("    %d => %s," % (n, jl_intvec(roots_dict_Zq[n])))
+    lines.append(")\n")
+
+    # (f, ntt(f)) pairs.
+    lines.append("# (f, ntt(f)); the NTT is multipoint evaluation at ROOTS_ZQ[n].")
+    lines.append("const NTT_KAT = Tuple{Vector{Int},Vector{Int}}[")
+    for n, label in [(2, "n2"), (4, "n4"), (8, "n8"), (16, "n16"),
+                     (64, "n64"), (512, "n512"), (1024, "n1024")]:
+        f = rand_poly("ntt" + label, n, REF_Q)
+        lines.append("    (%s, %s)," % (jl_intvec(f), jl_intvec(ntt(f))))
+    # edge cases worth pinning: the constant polynomial and a monomial
+    for n in (8, 512):
+        one = [1] + [0] * (n - 1)
+        lines.append("    (%s, %s)," % (jl_intvec(one), jl_intvec(ntt(one))))
+        xx = [0, 1] + [0] * (n - 2)
+        lines.append("    (%s, %s)," % (jl_intvec(xx), jl_intvec(ntt(xx))))
+    lines.append("]\n")
+
+    # Pointwise operations in the NTT domain.
+    lines.append("# (f_ntt, g_ntt, f*g pointwise, f/g pointwise) for invertible g_ntt.")
+    lines.append("const NTT_POINTWISE = " +
+                 "Tuple{Vector{Int},Vector{Int},Vector{Int},Vector{Int}}[")
+    for n, label in [(8, "p8"), (64, "p64"), (512, "p512")]:
+        fn = ntt(rand_poly("pw" + label + "f", n, REF_Q))
+        gn = ntt(rand_poly("pw" + label + "g", n, REF_Q))
+        if any(x == 0 for x in gn):
+            continue
+        lines.append("    (%s, %s, %s, %s)," % (
+            jl_intvec(fn), jl_intvec(gn),
+            jl_intvec(mul_ntt(fn, gn)), jl_intvec(div_ntt(fn, gn))))
+    lines.append("]\n")
+
+    # A polynomial that is *not* invertible mod q, i.e. has a zero NTT
+    # coefficient.  Key generation must reject such an f (falcon.py rejects it
+    # via `if any((elem == 0) for elem in f_ntt)`), so we need a witness.
+    lines.append("# f with a zero NTT coefficient: key generation must reject these.")
+    lines.append("const NOT_INVERTIBLE = Tuple{Vector{Int},Int}[")
+    for n, label in [(8, "ni8"), (64, "ni64"), (512, "ni512")]:
+        g = ntt(rand_poly("ni" + label, n, REF_Q))
+        zero_at = (7 * n) // 13 % n            # arbitrary but deterministic
+        g[zero_at] = 0
+        f = intt(g)
+        assert any(x == 0 for x in ntt(f))
+        lines.append("    (%s, %d)," % (jl_intvec(f), zero_at))
+    lines.append("]\n")
+
+    write("ntt_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
     gen_chacha()
     gen_poly()
+    gen_ntt()
 
 
 if __name__ == "__main__":

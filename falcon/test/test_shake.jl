@@ -6,8 +6,7 @@
 #   * ChaCha20 PRNG: the Python reference implementation, via
 #     test/vectors/chacha20_kat.jl.
 
-include(joinpath(@__DIR__, "vectors", "shake256_kat.jl"))
-include(joinpath(@__DIR__, "vectors", "chacha20_kat.jl"))
+# Golden vectors are included by runtests.jl.
 
 @testset "shake" begin
 

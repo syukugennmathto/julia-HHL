@@ -11,7 +11,7 @@
 #     merge being mutually inverse).  These catch the cases the fixed vectors
 #     happen to miss.
 
-include(joinpath(@__DIR__, "vectors", "poly_kat.jl"))
+# Golden vectors are included by runtests.jl.
 
 @testset "poly" begin
 
