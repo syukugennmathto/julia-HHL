@@ -56,6 +56,7 @@ export polymulq_ntt, polydivq, is_invertible_zq
 export fft, ifft, fft_roots, split_fft, merge_fft
 export add_fft, sub_fft, neg_fft, mul_fft, div_fft, adj_fft
 export polymul_fft, polydiv_fft, polyadj_fft
+export set_fft_roots!, reset_fft_roots!, with_fft_roots
 
 # --- module 6 --------------------------------------------------------------
 export karamul, galois_conjugate, field_norm, lift, bitsize
@@ -66,6 +67,11 @@ export gs_norm, gs_norm_ok, gen_poly, ntru_gen, SIGMA_FG_MIN
 export samplerz, basesampler, approxexp, berexp
 export RCDT, EXP_COEFFS, bytesource, ReplayBytes
 
+# --- module 8 --------------------------------------------------------------
+export FalconTree, FFLDLNode, FFLDLLeaf
+export gram_fft, ldl_fft, ffldl_fft, normalize_tree!, falcon_tree
+export ffnp_fft, ffsampling_fft, leaf_sigmas, node_l10s, nleaves, treedepth
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
@@ -73,5 +79,6 @@ include("ntt.jl")
 include("fft.jl")
 include("ntrugen.jl")
 include("samplerz.jl")
+include("ffsampling.jl")
 
 end # module

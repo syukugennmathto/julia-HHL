@@ -408,3 +408,76 @@ function to_c_fft(f_fft::AbstractVector{ComplexF64})
     end
     return out
 end
+
+# ---------------------------------------------------------------------------
+# Choosing the root table: accuracy versus reference-compatibility
+# ---------------------------------------------------------------------------
+#
+# By default `fft_roots` computes its roots with `cispi`, which is correctly
+# rounded to within an ulp and agrees with the *C* reference, whose table is
+# given to 27 decimal digits.  The Python reference's table carries only ~15
+# significant digits and is the outlier (docs/debug_log.md #010).
+#
+# For most of this project that difference is invisible: it is 1e-16 relative,
+# and every FFT test passes against either table.
+#
+# It stops being invisible in `ffsampling` (module 8).  There the FFT result
+# becomes the *centre* of a discrete Gaussian, the sampler's rejection loop
+# compares against random bytes, and a last-ulp difference in the centre flips
+# a comparison and returns a different integer.  Measured on the six recorded
+# ffSampling vectors: with our roots, one of six reproduces the Python
+# reference; with the Python table installed, six of six.
+#
+# That is the whole FN-DSA floating-point problem in one measurement, and it is
+# why the C reference emulates floating point in integer arithmetic instead of
+# trusting the FPU.  See docs/math/08_ffsampling.md.
+#
+# So the table is made switchable -- not to paper over the difference, but so
+# that the difference can be *demonstrated*.  The inaccurate table is not
+# shipped in `src/`; it lives in `test/vectors/fft_kat.jl` as what it is,
+# recorded reference data.
+
+"""
+    set_fft_roots!(table)
+
+Install an explicit root table, replacing the computed one.  `table` maps a
+degree `n` to the `n` roots of `x^n + 1` in that degree's expected order.
+
+Intended for reproducing another implementation's floating-point results
+exactly; see the discussion above.  Call [`reset_fft_roots!`](@ref) to go back
+to the computed roots.
+"""
+function set_fft_roots!(table::AbstractDict{Int,Vector{ComplexF64}})
+    empty!(_FFT_ROOT_CACHE)
+    for (n, v) in table
+        _check_degree(n)
+        length(v) == n || throw(ArgumentError(
+            "root table for degree $n has $(length(v)) entries"))
+        _FFT_ROOT_CACHE[n] = copy(v)
+    end
+    return nothing
+end
+
+"""
+    reset_fft_roots!()
+
+Discard any installed root table and go back to computing roots with `cispi`.
+"""
+reset_fft_roots!() = (empty!(_FFT_ROOT_CACHE); nothing)
+
+"""
+    with_fft_roots(f, table)
+
+Run `f()` with `table` installed as the root table, restoring the previous
+state afterwards even if `f` throws.
+"""
+function with_fft_roots(f, table::AbstractDict{Int,Vector{ComplexF64}})
+    saved = copy(_FFT_ROOT_CACHE)
+    try
+        set_fft_roots!(table)
+        return f()
+    finally
+        empty!(_FFT_ROOT_CACHE)
+        merge!(_FFT_ROOT_CACHE, saved)
+    end
+end

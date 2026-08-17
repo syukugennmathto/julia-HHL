@@ -689,6 +689,124 @@ def gen_keygen():
     write("keygen_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 8: ffLDL tree and fast Fourier sampling
+# ---------------------------------------------------------------------------
+
+def gen_ffsampling():
+    import math
+    import ntrugen                                          # noqa: E402
+    from fft import fft, ifft                               # noqa: E402
+    from ffsampling import gram, ffldl_fft, ffsampling_fft, ffnp_fft  # noqa: E402
+
+    # normalize_tree lives in falcon.py, which imports numpy; it is four lines,
+    # so it is inlined here rather than pulling in the dependency.
+    # [Py-ref] scripts/pyref/falcon.py:175-190
+    def normalize_tree(tree, sigma):
+        if len(tree) == 3:
+            normalize_tree(tree[1], sigma)
+            normalize_tree(tree[2], sigma)
+        else:
+            tree[0] = sigma / math.sqrt(tree[0].real)
+            tree[1] = 0
+
+    def leaves(t):
+        return leaves(t[1]) + leaves(t[2]) if len(t) == 3 else [t[0]]
+
+    def l10s(t):
+        return ([t[0]] + l10s(t[1]) + l10s(t[2])) if len(t) == 3 else []
+
+    orig = ntrugen.samplerz
+    SIGMA = 165.7366171829776
+    SIGMIN = 1.2778336969128337
+
+    lines = []
+    lines.append("# ffLDL trees and ffSampling, from the Python reference.")
+    lines.append("# Keys are regenerated from the same labels as keygen_kat.jl, so a")
+    lines.append("# mismatch here after a keygen change is a keygen bug, not a tree bug.")
+    lines.append("")
+    lines.append("# (n, key stream label, key stream bytes, sigma, leaf sigmas, l10 vectors)")
+    lines.append("const FFLDL_KAT = " +
+                 "Tuple{Int,String,Int,Float64,Vector{Float64},Vector{Vector{ComplexF64}}}[")
+
+    keys = {}
+    for n in (8, 16, 32):
+        label = "falcon-jl/keygen/ntrugen-%d" % n
+        raw = hashlib.shake_256(label.encode()).digest(8_000_000)
+        pos = [0]
+
+        def rb(k, _raw=raw, _pos=pos):
+            out = _raw[_pos[0]:_pos[0] + k]
+            _pos[0] += k
+            return out
+
+        ntrugen.samplerz = lambda mu, s, smin, _rb=rb: orig(mu, s, smin, randombytes=_rb)
+        f, g, F, G = ntrugen.ntru_gen(n)
+        ntrugen.samplerz = orig
+        used = pos[0]
+        keys[n] = (label, used, f, g, F, G)
+
+        B = [[g, [-x for x in f]], [G, [-x for x in F]]]
+        T = ffldl_fft([[fft(p) for p in row] for row in gram(B)])
+        normalize_tree(T, SIGMA)
+        lines.append('    (%d, "%s", %d, %r, %s, [%s]),' % (
+            n, label, used, SIGMA,
+            jl_floatvec(leaves(T)),
+            ", ".join(jl_cplxvec(v) for v in l10s(T))))
+        print("  ffldl n=%3d: %d leaves, %d internal nodes" % (n, len(leaves(T)), len(l10s(T))))
+    lines.append("]\n")
+
+    lines.append("# (n, key label, key bytes, target t0, t1 (coefficient domain),")
+    lines.append("#  sampling stream label, sampling bytes consumed, z0, z1)")
+    lines.append("const FFSAMPLING_KAT = " +
+                 "Tuple{Int,String,Int,Vector{Float64},Vector{Float64},String,Int," +
+                 "Vector{Int},Vector{Int}}[")
+    for n in (8, 16, 32):
+        label, kused, f, g, F, G = keys[n]
+        B = [[g, [-x for x in f]], [G, [-x for x in F]]]
+        T = ffldl_fft([[fft(p) for p in row] for row in gram(B)])
+        normalize_tree(T, SIGMA)
+        for variant in (0, 1):
+            slabel = "falcon-jl/ffsampling/probe-%d-%d" % (n, variant)
+            s2 = hashlib.shake_256(slabel.encode()).digest(1_000_000)
+            p2 = [0]
+
+            def rb2(k, _s=s2, _p=p2):
+                out = _s[_p[0]:_p[0] + k]
+                _p[0] += k
+                return out
+
+            t0 = [float(c) for c in rand_signed_poly("fst0-%d-%d" % (n, variant), n, 5)]
+            t1 = [float(c) for c in rand_signed_poly("fst1-%d-%d" % (n, variant), n, 5)]
+            z = ffsampling_fft([fft(t0), fft(t1)], T, SIGMIN, rb2)
+            z0 = [int(round(x)) for x in ifft(z[0])]
+            z1 = [int(round(x)) for x in ifft(z[1])]
+            lines.append('    (%d, "%s", %d, %s, %s, "%s", %d, %s, %s),' % (
+                n, label, kused, jl_floatvec(t0), jl_floatvec(t1),
+                slabel, p2[0], jl_intvec(z0), jl_intvec(z1)))
+    lines.append("]\n")
+
+    # ffnp: the deterministic sibling, no randomness at all
+    lines.append("# (n, key label, key bytes, t0, t1, ffnp z0, ffnp z1) -- deterministic")
+    lines.append("const FFNP_KAT = " +
+                 "Tuple{Int,String,Int,Vector{Float64},Vector{Float64},Vector{Int},Vector{Int}}[")
+    for n in (8, 16, 32):
+        label, kused, f, g, F, G = keys[n]
+        B = [[g, [-x for x in f]], [G, [-x for x in F]]]
+        T = ffldl_fft([[fft(p) for p in row] for row in gram(B)])
+        normalize_tree(T, SIGMA)
+        t0 = [float(c) for c in rand_signed_poly("fnp0-%d" % n, n, 5)]
+        t1 = [float(c) for c in rand_signed_poly("fnp1-%d" % n, n, 5)]
+        z = ffnp_fft([fft(t0), fft(t1)], T)
+        lines.append('    (%d, "%s", %d, %s, %s, %s, %s),' % (
+            n, label, kused, jl_floatvec(t0), jl_floatvec(t1),
+            jl_intvec([int(round(x)) for x in ifft(z[0])]),
+            jl_intvec([int(round(x)) for x in ifft(z[1])])))
+    lines.append("]\n")
+
+    write("ffsampling_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
@@ -699,6 +817,7 @@ def main():
     gen_ntrugen()
     gen_samplerz()
     gen_keygen()
+    gen_ffsampling()
 
 
 if __name__ == "__main__":
