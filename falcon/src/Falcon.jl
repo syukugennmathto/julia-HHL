@@ -62,11 +62,16 @@ export karamul, galois_conjugate, field_norm, lift, bitsize
 export ntru_solve, NTRUSolveFailure, ntru_equation_residual, ntru_equation_holds
 export gs_norm, gs_norm_ok
 
+# --- module 7 --------------------------------------------------------------
+export samplerz, basesampler, approxexp, berexp
+export RCDT, EXP_COEFFS, bytesource, ReplayBytes
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
 include("ntt.jl")
 include("fft.jl")
 include("ntrugen.jl")
+include("samplerz.jl")
 
 end # module

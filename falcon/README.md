@@ -16,7 +16,7 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 | 4 | `src/ntt.jl` | 実装済 / **テスト合格** |
 | 5 | `src/fft.jl` | 実装済 / **テスト合格**（C 参照実装とも突き合わせ済み） |
 | 6 | `src/ntrugen.jl` | 実装済 / **テスト合格**（`ntru_gen` は module 7 待ち） |
-| 7 | `src/samplerz.jl` | 未着手 |
+| 7 | `src/samplerz.jl` | 実装済 / **テスト合格**（公式 KAT 3072 本） |
 | 8 | `src/ffsampling.jl` | 未着手 |
 | 9 | `src/encoding.jl` | 未着手 |
 | 10 | `src/falcon.jl` | 未着手 |

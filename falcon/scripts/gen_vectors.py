@@ -543,6 +543,81 @@ def gen_ntrugen():
     write("ntrugen_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 7: the discrete Gaussian sampler
+# ---------------------------------------------------------------------------
+
+def gen_samplerz():
+    sys.path.insert(0, os.path.join(HERE, "pyref", "scripts"))
+    from samplerz_KAT512 import sampler_KAT512      # noqa: E402
+    from samplerz_KAT1024 import sampler_KAT1024    # noqa: E402
+    from samplerz import basesampler, approxexp, RCDT, C  # noqa: E402
+
+    lines = []
+    lines.append("# The official samplerz Known Answer Tests.")
+    lines.append("# Source: tprest/falcon.py, scripts/samplerz_KAT512.py and")
+    lines.append("#         scripts/samplerz_KAT1024.py (MIT, Thomas Prest).")
+    lines.append("#")
+    lines.append("# REPLAY CONVENTION: the reference harness (test.py, KAT_randbytes)")
+    lines.append("# hands the sampler the next k bytes **reversed**:")
+    lines.append("#     bytes.fromhex(octets[:2k])[::-1]")
+    lines.append("# so these must be replayed with ReplayBytes(...; reversed_chunks=true).")
+    lines.append("# Feeding them in natural order silently produces a different sample.")
+    lines.append("# See docs/debug_log.md #022.")
+    lines.append("")
+    lines.append("# (mu, sigma, sigmin, random octets, expected z)")
+    lines.append("const SAMPLERZ_KAT = Tuple{Float64,Float64,Float64,Vector{UInt8},Int}[")
+    for D in sampler_KAT512 + sampler_KAT1024:
+        lines.append("    (%r, %r, %r, %s, %d)," % (
+            D["mu"], D["sigma"], D["sigmin"],
+            jl_bytes(bytes.fromhex(D["octets"])), D["z"]))
+    lines.append("]\n")
+
+    # basesampler in isolation: 9 bytes in, one small integer out.
+    lines.append("# (9 input bytes, z0) for basesampler, fed in natural order.")
+    lines.append("const BASESAMPLER_KAT = Tuple{Vector{UInt8},Int}[")
+    for k in range(64):
+        raw = stream("basesampler-%d" % k, 9)
+        pos = [0]
+
+        def rb(n, _raw=raw, _pos=pos):
+            out = _raw[_pos[0]:_pos[0] + n]
+            _pos[0] += n
+            return out
+
+        lines.append("    (%s, %d)," % (jl_bytes(raw), basesampler(randombytes=rb)))
+    # the extremes: u = 0 must give the largest z0, u = all-ones the smallest
+    for raw in (b"\x00" * 9, b"\xff" * 9):
+        pos = [0]
+
+        def rb(n, _raw=raw, _pos=pos):
+            out = _raw[_pos[0]:_pos[0] + n]
+            _pos[0] += n
+            return out
+
+        lines.append("    (%s, %d)," % (jl_bytes(raw), basesampler(randombytes=rb)))
+    lines.append("]\n")
+
+    # approxexp in isolation: this is the fixed-point core, and the place where
+    # Python's unbounded ints hide the required widths.
+    lines.append("# (x, ccs, approxexp(x, ccs)) -- fixed point, must match exactly.")
+    lines.append("const APPROXEXP_KAT = Tuple{Float64,Float64,UInt64}[")
+    import math
+    xs = [0.0, 1e-9, 0.1, 0.25, 0.5, 0.6931471, 0.69314718055]
+    ccss = [0.5, 0.7499908532676649, 0.9, 0.999999]
+    for x in xs:
+        for ccs in ccss:
+            lines.append("    (%r, %r, 0x%016x)," % (x, ccs, approxexp(x, ccs)))
+    lines.append("]\n")
+
+    # the constant tables, so a transposed digit is caught immediately
+    lines.append("const RCDT_REF = UInt128[" + ", ".join(str(v) for v in RCDT) + "]\n")
+    lines.append("const EXP_COEFFS_REF = UInt64[" +
+                 ", ".join("0x%016x" % v for v in C) + "]\n")
+
+    write("samplerz_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
@@ -551,6 +626,7 @@ def main():
     gen_ntt()
     gen_fft()
     gen_ntrugen()
+    gen_samplerz()
 
 
 if __name__ == "__main__":
