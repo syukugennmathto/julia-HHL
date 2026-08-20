@@ -59,6 +59,7 @@ include(joinpath(@__DIR__, "vectors", "poly_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "ntt_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "fft_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "fft_c_kat.jl"))
+include(joinpath(@__DIR__, "vectors", "fft_roots_c_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "ntrugen_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "samplerz_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "keygen_kat.jl"))
@@ -79,4 +80,15 @@ include(joinpath(@__DIR__, "vectors", "falcon_kat.jl"))
     include("test_ffsampling.jl") # module 8
     include("test_encoding.jl")  # module 9
     include("test_falcon.jl")    # module 10
+
+    # The other parameter set, end to end.  Kept last and in its own file
+    # because it is by far the slowest thing in the suite: one n = 1024 key
+    # generation dominates it (docs/debug_log.md #032).  Set the environment
+    # variable FALCON_SKIP_1024=1 to leave it out during quick iteration -- but
+    # it must run before anything is committed.
+    if get(ENV, "FALCON_SKIP_1024", "0") == "1"
+        @info "skipping test_falcon1024.jl (FALCON_SKIP_1024=1)"
+    else
+        include("test_falcon1024.jl")
+    end
 end

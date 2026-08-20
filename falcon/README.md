@@ -14,31 +14,57 @@ FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装�
 | 2 | `src/shake.jl` | 実装済 / **テスト合格**（SHAKE256 は自前 Keccak） |
 | 3 | `src/poly.jl` | 実装済 / **テスト合格** |
 | 4 | `src/ntt.jl` | 実装済 / **テスト合格** |
-| 5 | `src/fft.jl` | 実装済 / **テスト合格**（C 参照実装とも突き合わせ済み） |
+| 5 | `src/fft.jl` | 実装済 / **テスト合格**（根の表が C 参照実装と bit 一致） |
 | 6 | `src/ntrugen.jl` | 実装済 / **テスト合格**（`ntru_gen` 含む） |
 | 7 | `src/samplerz.jl` | 実装済 / **テスト合格**（公式 KAT 3072 本） |
 | 8 | `src/ffsampling.jl` | 実装済 / **テスト合格** |
 | 9 | `src/encoding.jl` | 実装済 / **テスト合格**（C 参照実装のバイトと相互運用） |
 | 10 | `src/falcon.jl` | 実装済 / **テスト合格**（C 参照実装の署名を検証） |
 
-> **状態**: モジュール 1〜10 すべて実装済み、**15878 件のテストが全て合格**
-> （実行約 3 分）。ただし実行に使ったのは **Julia 1.11.9**（Docker イメージから
-> 取り出したもの。経緯は `docs/debug_log.md` #013）であって、
-> **ユーザ環境の 1.12 ではない**。1.12 でも一度確認すること。
+> **状態**: モジュール 1〜10 すべて実装済み、**Julia 1.12.7 で全テスト合格**。
+> FALCON-512 と **FALCON-1024** の両方が keygen / sign / verify を通る。
 >
 > **達成したこと**: C 参照実装が生成した本物の FALCON-512 の署名を、
 > 我々の `falcon_verify` が受理する。鍵・署名のバイト形式も相互運用する。
+> さらに **FFT の根の表が C 参照実装の `fpr_gm_tab` と bit 完全一致**
+> （`docs/debug_log.md` #031）。
 >
-> **原理的に達成できないこと**: C（や Python）の**署名バイトの再現**。
-> 署名は浮動小数点に依存し、FFT の根の表の 1 ulp の違いで出力が変わる
-> （`docs/debug_log.md` #025 に実測: 6 本中 5 本が変わる）。
-> 署名側は性質（検証が通る・β² 以下・乱択・改竄拒否）で守っている。
+> **署名バイトの再現について**: まだできていない。ただし理由が変わった。
+> #025 では「浮動小数点だから原理的に無理」と書いたが、#031 の実測で
+> 原因が**定数表の 1 ulp の差**（我々の `cispi` 側の誤差）だと特定でき、
+> 表は合わせた。残る差分は演算の順序だけである。
+> 署名側は当面、性質（検証が通る・β² 以下・乱択・改竄拒否）で守っている。
 
 ## テストの走らせ方
 
 ```sh
 julia --project=falcon -e 'using Pkg; Pkg.test()'
 ```
+
+n=1024 の鍵生成が 1 本入っていて、そこが実行時間の大半を占める。
+反復中に飛ばしたければ:
+
+```sh
+FALCON_SKIP_1024=1 julia --project=falcon -e 'using Pkg; Pkg.test()'
+```
+
+（コミット前には必ず外して走らせること。）
+
+## 速度対決（C 参照実装 vs Julia）
+
+数値と再現手順は `docs/benchmarks.md`。要点だけ:
+
+| op (n=512, 中央値 ms) | C (FPEMU) | C (native FP) | Julia |
+|:---|---:|---:|---:|
+| `keygen` | 13.0 | 6.35 | 9610 |
+| `sign` (展開済み鍵) | 2.04 | 0.194 | **2.05** |
+| `verify` | 0.030 | 0.029 | 0.458 |
+
+**署名は C の FPEMU 版と互角**。これは Julia が速いのではなく、
+参照実装が移植性のために浮動小数点をソフトウェアで実装していて、
+そのぶん 1 桁遅いという話である（ネイティブ FPU なら 10 倍速い）。
+鍵生成が 738 倍遅いのは `ntru_solve` の `BigInt` が原因で、
+これは定数倍ではなくアルゴリズムの差。
 
 ## golden vector の再生成
 
@@ -60,10 +86,15 @@ scripts/
   gen_vectors.py    golden vector 生成スクリプト（Python 参照実装を使う）
   cref_fft_dump.c   C 参照実装から FFT ベクタを吐くドライバ
   cref_kat_dump.c   C 参照実装から鍵・署名の KAT を吐くドライバ
+  cref_gm_dump.c    C 参照実装から FFT の根の表 fpr_gm_tab を吐くドライバ
+  cref_bench.c      C 参照実装の速度を測るドライバ
+  bench.jl          こちらの速度を同じ形式で測るスクリプト
+  bench_compare.jl  両者を並べて表にする
   pyref/            Python 参照実装 (tprest/falcon.py, MIT) を vendor したもの
 docs/
   debug_log.md          デバッグ記録（セッションをまたぐ唯一の記憶）
   build_cref_macos.md   C 参照実装を dylib にする手順（macOS / Apple Silicon）
+  benchmarks.md         C 版との速度対決の生データと再現手順
   math/                 数学的背景（原稿素材）
 ```
 

@@ -53,7 +53,7 @@ export ntt, intt, ntt_roots, ntt_add, ntt_sub, ntt_mul, ntt_div
 export polymulq_ntt, polydivq, is_invertible_zq
 
 # --- module 5 --------------------------------------------------------------
-export fft, ifft, fft_roots, split_fft, merge_fft
+export fft, ifft, fft_roots, unit_root, split_fft, merge_fft
 export add_fft, sub_fft, neg_fft, mul_fft, div_fft, adj_fft
 export polymul_fft, polydiv_fft, polyadj_fft
 export set_fft_roots!, reset_fft_roots!, with_fft_roots

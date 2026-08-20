@@ -380,9 +380,10 @@ def gen_fft():
     lines.append("# NOTE ON TOLERANCE: the Python reference's hard-coded root table carries")
     lines.append("# decimal constants of only ~15 significant digits -- up to about 370 ulp")
     lines.append("# of error at n = 512.  Our Julia implementation computes its roots with")
-    lines.append("# cispi and is *more* accurate, so these vectors must be compared with a")
-    lines.append("# tolerance, not for equality.  The tight comparison lives in")
-    lines.append("# fft_c_kat.jl, whose oracle is the correctly-rounded C table.")
+    lines.append("# `unit_root`, which is correctly rounded and therefore *more* accurate,")
+    lines.append("# so these vectors must be compared with a tolerance, not for equality.")
+    lines.append("# The tight comparison lives in fft_roots_c_kat.jl, whose oracle is the")
+    lines.append("# C reference's own fpr_gm_tab (docs/debug_log.md #031).")
     lines.append("")
 
     lines.append("# roots_dict[n]: the n roots of x^n+1 in C, in the reference's order.")

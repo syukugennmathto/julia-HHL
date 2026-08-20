@@ -102,6 +102,42 @@ nm -gU libfalcon.dylib | grep falcon_inner_ | head
 つまり FALCON では「Float64 の結果がプラットフォーム間で bit 単位に
 再現すること」自体がセキュリティ性質である。詳細は `docs/math/05_fft.md`。
 
+### 両モードを実際に比べたい場合
+
+`config.h` の 2 つの `#define` を `#ifndef` で包むと、
+コマンドラインの `-D` が勝つようになる:
+
+```c
+#ifndef FALCON_FPEMU
+#define FALCON_FPEMU   1
+#endif
+#ifndef FALCON_FPNATIVE
+#define FALCON_FPNATIVE 0
+#endif
+```
+
+これで同じソースから 2 つのバイナリが作れる:
+
+```sh
+cc -O2                                      -o kat_emu    kat.c *.c
+cc -O2 -DFALCON_FPEMU=0 -DFALCON_FPNATIVE=1 -o kat_native kat.c *.c
+```
+
+**実測結果（x86-64 / SSE2）**: 両者の出力は
+**秘密鍵・公開鍵・署名まで含めてバイト完全一致**する。
+`-O3 -march=native` でも `-Ofast` でも `-ffast-math` でも変わらない。
+`fpr_gm_tab` も全 1024 スロットが bit 一致する
+（`scripts/cref_gm_dump.c` で確認。`docs/debug_log.md` #031）。
+
+**では上の警告は何だったのか。** 「現に一致するか」ではなく
+「**すべてのプラットフォームで一致することを証明できるか**」が問題なのである。
+x87 の 80 bit 中間結果、FMA の縮約、libm の実装差 ―
+これらは x86-64/SSE2 では顔を出さないが、仕様としては排除しなければならない。
+参照実装が `set_fpu_cw(2)` を併用しているのも同じ理由。
+
+代償は速度で、**署名は FPEMU のほうが約 10 倍遅い**
+（`docs/benchmarks.md`）。
+
 ### 2 つのモードでの `fpr`
 
 | モード | `fpr` の型 | 定義 |
@@ -176,6 +212,21 @@ Julia 側には `Falcon.from_c_fft` / `Falcon.to_c_fft` として実装済み。
 また、C から取った実際のベクタが `test/vectors/fft_c_kat.jl` にコミットして
 あるので、**dylib をビルドしなくてもモジュール 5 は C と突き合わせ済み**である。
 再生成したい場合のドライバは `scripts/cref_fft_dump.c`。
+
+## 3.7 同梱している C ドライバ
+
+`scripts/` にある C ファイルは全部これ用のもの。
+リンクに要る `.c` は各ファイルの冒頭コメントに書いてある。
+
+| ファイル | 用途 | 生成物 |
+|:---|:---|:---|
+| `cref_fft_dump.c` | `Zf(FFT)` / `Zf(iFFT)` の入出力 | `test/vectors/fft_c_kat.jl` |
+| `cref_kat_dump.c` | 固定シードからの鍵・署名 | `test/vectors/cref_kat.jl` |
+| `cref_gm_dump.c` | `fpr_gm_tab`（FFT の根の表） | `test/vectors/fft_roots_c_kat.jl` |
+| `cref_bench.c` | keygen / sign / verify の時間 | `docs/benchmarks.md` |
+
+`cref_gm_dump.c` と `cref_bench.c` は 3 節の `#ifndef` 化を前提に、
+FPEMU 版とネイティブ版の 2 通りでビルドして比べるように書いてある。
 
 ## 4. 突き合わせに使える内部関数（`inner.h` の行番号つき）
 

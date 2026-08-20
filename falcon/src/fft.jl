@@ -141,24 +141,59 @@ function fft_root_exponents(n::Integer)
 end
 
 """
+    unit_root(k, n) -> ComplexF64
+
+`exp(i pi k / n)`, **correctly rounded**: the returned `Float64` pair is the
+nearest representable one to the true value, componentwise.
+
+Why not just `cispi(k / n)`?  Because `cispi` is not correctly rounded.  It is
+faithful -- within an ulp -- which is all its contract promises, but "within an
+ulp" is exactly the size of error that changes a FALCON signature
+(docs/debug_log.md #025).  Measured against the C reference's `fpr_gm_tab` at
+n = 1024: `cispi` lands 1 ulp away on 50 of the 1023 entries, `sinpi(0.25)`
+among them.  Rounding once from 256-bit `BigFloat` lands on all 1023.
+(docs/debug_log.md #031.)
+
+The multiples of `pi/2` are special-cased, and must be: there `cos` or `sin` is
+*exactly* `0` or `+-1`, and no finite-precision evaluation of `pi` can produce
+an exact zero.
+
+This runs at table-construction time only, once per `n`, so the `BigFloat` cost
+is irrelevant -- `fft_roots` memoises.
+
+[C-ref] cbuild/fpr.c:2415 (`fpr_gm_tab`, FPNATIVE form: 27 decimal digits, i.e.
+    the correctly-rounded value written out for the compiler to round again)
+"""
+function unit_root(k::Integer, n::Integer)
+    kk = mod(Int(k), 2 * Int(n))                 # angle pi*kk/n, kk in [0, 2n)
+    q, r = divrem(4 * kk, 2 * Int(n))            # quarter turns, remainder
+    if r == 0                                    # exactly on an axis
+        return (ComplexF64(1, 0), ComplexF64(0, 1),
+                ComplexF64(-1, 0), ComplexF64(0, -1))[q + 1]
+    end
+    return setprecision(BigFloat, 256) do
+        theta = big(pi) * kk / Int(n)
+        complex(Float64(cos(theta)), Float64(sin(theta)))
+    end
+end
+
+"""
     fft_roots(n) -> Vector{ComplexF64}
 
 The `n` roots of `x^n + 1` in `C`, in the reference's order.
 `fft(f)[j]` is `f` evaluated at `fft_roots(n)[j]`.
 
-Computed as `cispi(k/n)`.  Since `n` is a power of two, `k/n` is exact in
-binary, so each root is correctly rounded to within an ulp or so.
-
-Note that this is *more* accurate than the Python reference, whose
-hard-coded table carries decimal constants of only about 15 significant
-digits -- up to ~370 ulp of error at n = 512.  The C reference's table is
-given to 27 digits and is correctly rounded.  Our tests therefore compare
-against the Python vectors with a tolerance, and against the C vectors much
-more tightly.  (docs/debug_log.md #010.)
+Each root is `unit_root(k, n)`, i.e. correctly rounded.  That makes this table
+bit-identical to the C reference's `fpr_gm_tab` (up to the sign of the zero at
+`pi/2`, which C writes as `-0.0`), and *more* accurate than the Python
+reference, whose hard-coded decimal constants carry only about 15 significant
+digits -- up to ~370 ulp of error at n = 512.  The Python vectors are therefore
+compared with a tolerance and the C vectors for equality.
+(docs/debug_log.md #010, #031.)
 """
 fft_roots(n::Integer) =
     get!(_FFT_ROOT_CACHE, Int(n)) do
-        [cispi(k / n) for k in fft_root_exponents(n)]
+        [unit_root(k, n) for k in fft_root_exponents(n)]
     end
 
 # ---------------------------------------------------------------------------
@@ -413,13 +448,19 @@ end
 # Choosing the root table: accuracy versus reference-compatibility
 # ---------------------------------------------------------------------------
 #
-# By default `fft_roots` computes its roots with `cispi`, which is correctly
-# rounded to within an ulp and agrees with the *C* reference, whose table is
-# given to 27 decimal digits.  The Python reference's table carries only ~15
-# significant digits and is the outlier (docs/debug_log.md #010).
+# By default `fft_roots` computes its roots with `unit_root`, which rounds once
+# from 256-bit BigFloat and is therefore correctly rounded -- bit-identical to
+# the *C* reference's table, which is given to 27 decimal digits.  The Python
+# reference's table carries only ~15 significant digits and is the outlier
+# (docs/debug_log.md #010).
 #
-# For most of this project that difference is invisible: it is 1e-16 relative,
-# and every FFT test passes against either table.
+# (It did not start out that way.  The first version used `cispi`, which is
+# only *faithful*, and was 1 ulp off from C on 50 of 1023 entries.  That was
+# the actual cause of the divergence described below -- the error was ours.
+# docs/debug_log.md #031.)
+#
+# For most of this project the difference between the tables is invisible: it
+# is 1e-16 relative, and every FFT test passes against either table.
 #
 # It stops being invisible in `ffsampling` (module 8).  There the FFT result
 # becomes the *centre* of a discrete Gaussian, the sampler's rejection loop
@@ -461,7 +502,8 @@ end
 """
     reset_fft_roots!()
 
-Discard any installed root table and go back to computing roots with `cispi`.
+Discard any installed root table and go back to computing roots with
+[`unit_root`](@ref).
 """
 reset_fft_roots!() = (empty!(_FFT_ROOT_CACHE); nothing)
 

@@ -61,6 +61,54 @@
         end
     end
 
+    @testset "roots are bit-identical to the C reference's fpr_gm_tab" begin
+        # Regression test for docs/debug_log.md #031.
+        #
+        # This is the tight comparison the Python vectors above cannot give.
+        # `cispi` is only *faithful* -- within an ulp -- and an ulp is exactly
+        # the perturbation that changes a signature (#025).  So the roots are
+        # rounded once from 256-bit BigFloat, and the claim being tested is
+        # equality of bit patterns, not closeness.
+        #
+        # If this test starts failing, the thing to check first is whether
+        # `unit_root`'s BigFloat precision is still enough, *not* whether the
+        # tolerance should be loosened -- there is no tolerance to loosen.
+
+        cbits(z::ComplexF64) =
+            (reinterpret(UInt64, real(z)), reinterpret(UInt64, imag(z)))
+
+        "exp(i*pi*k/1024) as the C table stores it, k any integer"
+        function gm_c(k::Int)
+            kk = mod(k, 2048)
+            kk == 0 && return (0x3ff0000000000000, 0x0000000000000000)
+            kk == 1024 && return (0xbff0000000000000, 0x0000000000000000)
+            kk < 1024 && return GM_TAB_C[kk]
+            re, im = GM_TAB_C[2048 - kk]        # conjugate: exact, cos even sin odd
+            return (re, im ⊻ 0x8000000000000000)
+        end
+
+        @test length(GM_TAB_C) == 1023
+
+        nchecked = 0
+        for n in (2, 4, 8, 16, 32, 64, 128, 256, 512, 1024)
+            scale = 1024 ÷ n
+            for (j, k) in enumerate(Falcon.fft_root_exponents(n))
+                want = gm_c(k * scale)
+                got = cbits(Falcon.fft_roots(n)[j])
+                # C writes cos(pi/2) as -0.0 and we produce +0.0.  Same value,
+                # and the sign of a zero cannot change any product's or sum's
+                # value here, only the sign of a zero result.  Accept it, and
+                # say so rather than silently masking the sign bit everywhere.
+                if want[1] == 0x8000000000000000 && got[1] == 0x0000000000000000
+                    want = (0x0000000000000000, want[2])
+                end
+                @test got == want
+                nchecked += 1
+            end
+        end
+        @test nchecked == 2046                  # 2 + 4 + ... + 1024
+    end
+
     @testset "the FFT/NTT orderings are NOT the same" begin
         # Recorded as a test because it is the natural wrong guess: the two
         # tables have the same tree *shape* but order each +- pair by different
