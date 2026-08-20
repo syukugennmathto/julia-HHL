@@ -19,9 +19,15 @@
 # Signature coefficients are Golomb-Rice coded: sign bit, seven low bits
 # verbatim, high bits in unary.  How many bytes that takes depends on the
 # coefficients, so a signature can *fail to fit* in the 666 bytes FALCON-512
-# allots -- in which case signing must **discard it and start over with a fresh
-# salt**.  That retry loop is part of the scheme, not an implementation detail,
-# and skipping it produces an implementation that works until it doesn't.
+# allots -- in which case signing must **discard it and sample again**.  That
+# retry loop is part of the scheme, not an implementation detail, and skipping
+# it produces an implementation that works until it doesn't.
+#
+# (Note what is *not* redrawn on a retry: the salt.  Both references keep it
+# and re-run only the sampler -- the C code draws the nonce once in
+# `falcon_sign_start` and copies the same 40 bytes inside the loop.  An earlier
+# draft of this comment said "with a fresh salt", which was wrong; see
+# falcon.jl's `falcon_sign` for why the distinction matters.)
 #
 # ---------------------------------------------------------------------------
 # The formats, from the normative C codec
@@ -310,7 +316,7 @@ dependent.
 [Py-ref] scripts/pyref/encoding.py:6-33 (`compress`)
 
 Returning `nothing` is not an error -- it is the signal that signing must
-retry with a fresh salt.  See the discussion in the module header.
+sample again (keeping the same salt).  See the module header.
 """
 function compress_sig(v::AbstractVector{<:Integer}, slen::Integer)
     bits = BitVector()
@@ -402,7 +408,7 @@ Assemble a PADDED-format signature: `0x30 + logn`, the 40-byte salt, then the
 compressed `s2`, zero-padded to exactly `sig_bytes`.
 
 Returns `nothing` when `s2` does not compress into the available room, which
-is the signal to retry with a fresh salt.
+is the signal to sample again (keeping the same salt).
 
 [C-ref] falcon.c:464 (header byte), falcon.h:335 (padded size)
 """

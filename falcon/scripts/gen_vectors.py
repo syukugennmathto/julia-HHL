@@ -865,6 +865,51 @@ def gen_encoding():
     write("encoding_kat.jl", "\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# module 10: hash-to-point
+# ---------------------------------------------------------------------------
+
+def gen_falcon():
+    lines = []
+    lines.append("# hash_to_point(message, salt, n): SHAKE256(salt || message) read two")
+    lines.append("# bytes at a time, big-endian, rejecting values >= floor(2^16/q)*q.")
+    lines.append("# Oracle: the reference's algorithm re-run here on hashlib, which is the")
+    lines.append("# same construction (falcon.py:252-278 uses SHAKE256 the same way).")
+    lines.append("const HASH_TO_POINT_KAT = Tuple{Vector{UInt8},Vector{UInt8},Int,Vector{Int}}[")
+
+    k = (1 << 16) // REF_Q
+    bound = k * REF_Q
+
+    def h2p(msg, salt, n):
+        xof = hashlib.shake_256(salt + msg)
+        # squeeze generously; the rejection rate is ~6%, so 4n bytes is ample
+        buf = xof.digest(8 * n + 64)
+        out, i, pos = [], 0, 0
+        while i < n:
+            elt = (buf[pos] << 8) + buf[pos + 1]
+            pos += 2
+            if elt < bound:
+                out.append(elt % REF_Q)
+                i += 1
+        return out
+
+    cases = [
+        (b"", bytes(40), 8),
+        (b"abc", bytes(40), 16),
+        (b"falcon", bytes(range(40)), 64),
+        (stream("h2p-msg", 100), stream("h2p-salt", 40), 512),
+        (stream("h2p-msg2", 3), stream("h2p-salt2", 40), 512),
+        (stream("h2p-msg3", 1000), stream("h2p-salt3", 40), 1024),
+    ]
+    for msg, salt, n in cases:
+        lines.append("    (%s, %s, %d, %s)," % (
+            jl_bytes(msg), jl_bytes(salt), n, jl_intvec(h2p(msg, salt, n))))
+    lines.append("]\n")
+    lines.append("# The rejection bound: values >= this are discarded rather than reduced.")
+    lines.append("const H2P_BOUND = %d\n" % bound)
+    write("falcon_kat.jl", "\n".join(lines))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     gen_shake()
@@ -877,6 +922,7 @@ def main():
     gen_keygen()
     gen_ffsampling()
     gen_encoding()
+    gen_falcon()
 
 
 if __name__ == "__main__":

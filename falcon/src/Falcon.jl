@@ -30,8 +30,8 @@ implementation before the next is started):
 | `encoding.jl`  | key/signature serialisation, Golomb-Rice compression |
 | `falcon.jl`    | `keygen` / `sign` / `verify`                         |
 
-Modules 1-6 are implemented and their tests pass; 7-10 are not yet written.
-See docs/debug_log.md for the running state of the project.
+All ten modules are implemented and their tests pass.  See docs/debug_log.md
+for the project's running state, and docs/math/ for the mathematical notes.
 """
 module Falcon
 
@@ -77,6 +77,12 @@ export encode_pubkey, decode_pubkey, encode_privkey, decode_privkey, recover_G
 export compress_sig, decompress_sig, encode_signature, decode_signature
 export MAX_FG_BITS, MAX_FG_BITS_F
 
+# --- module 10 -------------------------------------------------------------
+export FalconPublicKey, FalconPrivateKey
+export hash_to_point, falcon_keygen, falcon_sign, falcon_verify
+export expand_privkey, public_key, sample_preimage, signature_norm
+export privkey_from_bytes, pubkey_from_bytes, pubkey_bytes, privkey_bytes
+
 include("params.jl")
 include("shake.jl")
 include("poly.jl")
@@ -86,5 +92,6 @@ include("ntrugen.jl")
 include("samplerz.jl")
 include("ffsampling.jl")
 include("encoding.jl")
+include("falcon.jl")
 
 end # module
