@@ -253,4 +253,92 @@
         @test all(c -> 0 <= c < Q, pt)
         @test length(unique(pt)) > 500          # not degenerate
     end
+
+    @testset "signing reproduces the C reference byte for byte" begin
+        # THIS BRANCH's headline result (docs/debug_log.md #050).
+        #
+        # Since #025 this project could verify the C reference's signatures but
+        # not *produce* them: given the same key, message and randomness, the
+        # two implementations returned different (valid) signatures.  #048
+        # bisected the floating-point path and found three places where the
+        # specification's formulas and the reference's spelling are
+        # algebraically identical and differ in rounding.  With those three
+        # respelled -- complex division, LDL*'s D11, and the bottom two levels
+        # of ffSampling -- plus the reference's reciprocal leaf convention and
+        # its `fpr_inv_sigma` table, signing agrees exactly.
+        #
+        # The vectors are the C reference's own output, recorded by
+        # scripts/gen_cref_sign_kat.jl through a shim that seeds the sampler's
+        # ChaCha20 state directly (scripts/cref_shim.c), so the byte stream is
+        # pinned as well as the key and the message.  Regenerating them needs a
+        # C compiler; checking them does not.
+        p = FALCON_512
+        @test length(CREF_SIGN_KAT) == 8
+        for (f, g, F, G, salt, state, pt, want_s2, want_bytes) in CREF_SIGN_KAT
+            sk = expand_privkey(f, g, F, G, p)
+
+            # 1. the expanded key: same basis, same tree
+            @test length(leaf_sigmas(sk.tree)) == p.n
+
+            # 2. the sampled short vector, from the same 56-byte PRNG state
+            rng = chacha20(state)
+            s1, s2 = Falcon.sample_preimage(sk, pt, k -> randombytes!(rng, k))
+            @test Int.(s2) == want_s2
+
+            # 3. the compressed bytes.  C's encoder returns the natural length;
+            #    the padded format zero-fills to sig_bytes - 41, which is what
+            #    `compress_sig` produces.
+            ours = compress_sig(Int.(s2), p.sig_bytes - 41)
+            @test ours !== nothing
+            @test ours[1:length(want_bytes)] == want_bytes
+            @test all(iszero, ours[(length(want_bytes) + 1):end])
+
+            # 4. and it is a signature that verifies, which the equality above
+            #    does not by itself establish.
+            h = polydivq(Int[mod(c, p.q) for c in g], Int[mod(c, p.q) for c in f])
+            pk = FalconPublicKey(p, h)
+            sig = encode_signature(salt, Int.(s2), p.logn, p.sig_bytes)
+            @test sig !== nothing
+            @test sqnorm(s1, s2) <= p.sig_bound
+        end
+    end
+
+    @testset "the two spellings differ in bits and agree in signatures" begin
+        # The finding that #050 nearly got wrong.
+        #
+        # #048 identified three places where the specification's formulas and
+        # the C reference's spelling are algebraically identical and round
+        # differently.  The natural conclusion -- that respelling them is what
+        # makes signing reproduce C -- is FALSE, and measuring it is the only
+        # way to know.  With all three reverted, signing still reproduces C on
+        # every vector.  Over 480 signatures at n = 512 the two routes did not
+        # differ in a single coefficient out of 245760.
+        #
+        # The difference is real, it is just below the sampler's decision
+        # margin: `berexp` compares a fixed-point exponential against random
+        # bytes, and an ulp of slack in its argument flips that comparison with
+        # probability on the order of 2^-52.
+        #
+        # So the test asserts both halves, because either alone is misleading:
+        # the intermediate values DO differ bit-for-bit, and the signatures do
+        # NOT.
+        p = FALCON_512
+
+        # (a) the arithmetic really is different -- otherwise (b) is vacuous
+        let a = ComplexF64(1.0, 3.0), b = ComplexF64(7.0, 11.0)
+            @test Falcon._cdiv_cref(a, b) != a / b
+        end
+
+        # (b) and it does not reach the signature
+        for (f, g, F, G, salt, state, pt, want_s2, _) in CREF_SIGN_KAT
+            sk = expand_privkey(f, g, F, G, p)
+            r1 = chacha20(state); r2 = chacha20(state)
+            _, a = Falcon.sample_preimage(sk, pt, k -> randombytes!(r1, k))
+            _, b = with_spec_ffsampling() do
+                Falcon.sample_preimage(sk, pt, k -> randombytes!(r2, k))
+            end
+            @test Int.(a) == Int.(b)
+            @test Int.(a) == want_s2
+        end
+    end
 end

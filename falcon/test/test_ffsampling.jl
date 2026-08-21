@@ -147,8 +147,14 @@ end
             end
             return k
         end
-        @test nmatching() < length(FFSAMPLING_KAT)          # our roots: not all
-        @test with_fft_roots(nmatching, ROOTS_C) == length(FFSAMPLING_KAT)
+        # THIS BRANCH: `ffsampling_fft` follows the C reference by default, and
+        # these vectors came from the Python reference, so they are replayed
+        # through the specification's route.  Feeding them the C route is not a
+        # failure to be fixed -- it is the divergence this branch exists for
+        # (docs/debug_log.md #050).
+        @test with_spec_ffsampling(nmatching) < length(FFSAMPLING_KAT)   # our roots: not all
+        @test with_spec_ffsampling(() -> with_fft_roots(nmatching, ROOTS_C)) ==
+              length(FFSAMPLING_KAT)
         # and the tables really are different, but only just
         reset_fft_roots!()
         for n in (8, 512)
@@ -171,6 +177,7 @@ end
         # what the recorded vectors were produced with.  See the testset above:
         # with our own (more accurate) roots these do not reproduce, and that
         # is the finding rather than a defect.
+        with_spec_ffsampling() do
         with_fft_roots(ROOTS_C) do
         for (n, label, kused, t0, t1, slabel, sused, wz0, wz1) in FFSAMPLING_KAT
             T, _, _, _, _, _ = _tree_from_label(n, label, kused, 165.7366171829776)
@@ -180,6 +187,7 @@ end
             @test round.(Int, ifft(z0)) == wz0
             @test round.(Int, ifft(z1)) == wz1
             @test Falcon.consumed(src) == sused     # exact byte accounting
+        end
         end
         end
     end

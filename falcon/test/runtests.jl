@@ -67,6 +67,7 @@ include(joinpath(@__DIR__, "vectors", "keygen_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "ffsampling_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "encoding_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "cref_kat.jl"))
+include(joinpath(@__DIR__, "vectors", "cref_sign_kat.jl"))
 include(joinpath(@__DIR__, "vectors", "falcon_kat.jl"))
 
 @testset "Falcon.jl" begin

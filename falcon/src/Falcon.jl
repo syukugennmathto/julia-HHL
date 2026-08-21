@@ -77,13 +77,14 @@ export gs_norm, gs_norm_ok, gen_poly, ntru_gen, SIGMA_FG_MIN
 export mkgauss, mkgauss_u64, gen_poly_cdt, GAUSS_1024_12289   # branch variant, see README
 
 # --- module 7 --------------------------------------------------------------
-export samplerz, basesampler, approxexp, berexp
+export samplerz, samplerz_isigma, basesampler, approxexp, berexp
 export RCDT, EXP_COEFFS, bytesource, ReplayBytes
 
 # --- module 8 --------------------------------------------------------------
 export FalconTree, FFLDLNode, FFLDLLeaf
 export gram_fft, ldl_fft, ffldl_fft, normalize_tree!, falcon_tree
 export ffnp_fft, ffsampling_fft, leaf_sigmas, node_l10s, nleaves, treedepth
+export with_spec_ffsampling, FFSAMPLING_CREF
 
 # --- module 9 --------------------------------------------------------------
 export encode_pubkey, decode_pubkey, encode_privkey, decode_privkey, recover_G
