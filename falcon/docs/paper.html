@@ -1,0 +1,458 @@
+<title>Two Faithful Falcons</title>
+<style>
+  :root {
+    --ground: #f5f6f9;
+    --surface: #ffffff;
+    --surface-2: #eef0f6;
+    --ink: #171922;
+    --ink-soft: #3d4152;
+    --muted: #676d81;
+    --hairline: #e0e3ec;
+    --hairline-strong: #ccd1df;
+    --accent: #3a3fa6;      /* lattice indigo */
+    --accent-soft: #ecedf8;
+    --accent-ink: #2b2f86;
+    --signal: #b23a1b;      /* rare-divergence / key-recovery */
+    --signal-soft: #f8ebe4;
+    --good: #1f7a54;
+    --good-soft: #e6f2ec;
+    --shadow: 0 1px 2px rgba(20,22,34,.04), 0 8px 30px rgba(20,22,34,.05);
+    --measure: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101117;
+      --surface: #171922;
+      --surface-2: #1e212c;
+      --ink: #e9eaf1;
+      --ink-soft: #c2c6d4;
+      --muted: #9298a9;
+      --hairline: #282b37;
+      --hairline-strong: #363a49;
+      --accent: #9498f2;
+      --accent-soft: #20223a;
+      --accent-ink: #b9bcf7;
+      --signal: #ef8a63;
+      --signal-soft: #2c2019;
+      --good: #58c295;
+      --good-soft: #16261f;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #101117;
+    --surface: #171922;
+    --surface-2: #1e212c;
+    --ink: #e9eaf1;
+    --ink-soft: #c2c6d4;
+    --muted: #9298a9;
+    --hairline: #282b37;
+    --hairline-strong: #363a49;
+    --accent: #9498f2;
+    --accent-soft: #20223a;
+    --accent-ink: #b9bcf7;
+    --signal: #ef8a63;
+    --signal-soft: #2c2019;
+    --good: #58c295;
+    --good-soft: #16261f;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 18px;
+    line-height: 1.62;
+    font-feature-settings: "kern" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-soft); }
+
+  .wrap { max-width: 850px; margin: 0 auto; padding: 0 28px 6rem; }
+  .col { max-width: var(--measure); }
+
+  /* ---- type ---- */
+  h1, h2, h3 { font-family: "Spectral", Georgia, serif; font-weight: 600; line-height: 1.16; text-wrap: balance; color: var(--ink); }
+  h2 { font-size: 1.72rem; margin: 3.4rem 0 0.2rem; letter-spacing: -0.01em; }
+  h3 { font-size: 1.24rem; margin: 2.1rem 0 0.2rem; font-weight: 600; }
+  p { margin: 0.85rem 0; }
+  a { color: var(--accent-ink); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  strong { font-weight: 700; color: var(--ink); }
+  .mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .eyebrow {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.7rem; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--accent-ink); font-weight: 600;
+  }
+  .secnum {
+    font-family: "JetBrains Mono", monospace; font-size: 0.72rem; letter-spacing: 0.14em;
+    color: var(--muted); text-transform: uppercase; display: block; margin-top: 3.4rem; margin-bottom: -2.6rem;
+  }
+  .secnum + h2 { margin-top: 2.9rem; }
+  .lede { font-size: 1.06rem; color: var(--ink-soft); }
+
+  /* ---- masthead ---- */
+  header.mast { padding: 4.5rem 0 2.2rem; border-bottom: 1px solid var(--hairline); }
+  .mast .eyebrow { display: block; margin-bottom: 1.1rem; }
+  .mast h1 {
+    font-size: clamp(2.6rem, 6.5vw, 4.1rem);
+    letter-spacing: -0.025em; margin: 0 0 1rem; line-height: 1.02;
+  }
+  .mast .sub { font-size: 1.18rem; color: var(--ink-soft); max-width: 34ch; margin: 0; font-family: "Spectral", serif; }
+  .mast .meta {
+    margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem;
+    font-family: "JetBrains Mono", monospace; font-size: 0.74rem; color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .mast .meta b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---- stat cards ---- */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 2.4rem 0 1rem; }
+  .stat {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 1.1rem 1.15rem; box-shadow: var(--shadow);
+  }
+  .stat .k { font-family: "JetBrains Mono", monospace; font-size: 0.66rem; letter-spacing: 0.13em; text-transform: uppercase; color: var(--muted); }
+  .stat .v { font-family: "Spectral", serif; font-size: 1.86rem; font-weight: 600; margin: 0.35rem 0 0.15rem; letter-spacing: -0.01em; }
+  .stat .v.sig { color: var(--signal); }
+  .stat .v.good { color: var(--good); }
+  .stat .d { font-size: 0.86rem; color: var(--muted); line-height: 1.4; }
+
+  /* ---- callout / abstract ---- */
+  .abstract {
+    background: var(--surface); border: 1px solid var(--hairline); border-left: 3px solid var(--accent);
+    border-radius: 10px; padding: 1.4rem 1.6rem; margin: 2.2rem 0; box-shadow: var(--shadow);
+  }
+  .abstract .eyebrow { display:block; margin-bottom: 0.5rem; }
+  .abstract p { font-size: 0.98rem; color: var(--ink-soft); }
+  .abstract p:first-of-type { margin-top: 0.2rem; }
+
+  .note {
+    border: 1px solid var(--hairline); border-left: 3px solid var(--signal);
+    background: var(--signal-soft); border-radius: 8px; padding: 0.9rem 1.15rem; margin: 1.6rem 0;
+    font-size: 0.95rem; color: var(--ink-soft);
+  }
+  .note .eyebrow { color: var(--signal); display:block; margin-bottom: 0.35rem; }
+
+  /* ---- code ---- */
+  .code-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 1.3rem 0; }
+  pre {
+    margin: 0; background: var(--surface-2); border: 1px solid var(--hairline);
+    border-radius: 10px; padding: 0.95rem 1.05rem; overflow-x: auto;
+    font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.79rem; line-height: 1.62;
+    color: var(--ink-soft);
+  }
+  pre .lbl { display:block; font-size: 0.63rem; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.6rem; font-weight: 600; }
+  pre.pat-s .lbl { color: var(--accent-ink); }
+  pre.pat-c .lbl { color: var(--signal); }
+  .cm { color: var(--muted); }
+  code.inl { font-family: "JetBrains Mono", monospace; font-size: 0.84em; background: var(--surface-2); padding: 0.08em 0.35em; border-radius: 5px; border: 1px solid var(--hairline); }
+
+  /* ---- tables ---- */
+  .tbl-wrap { overflow-x: auto; margin: 1.4rem 0; border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.86rem; background: var(--surface); }
+  th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--hairline); }
+  thead th { font-family: "JetBrains Mono", monospace; font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+  tr.hl td { background: var(--accent-soft); }
+  tr.hl td:first-child { font-weight: 700; }
+  .win { color: var(--good); font-weight: 700; }
+  .lose { color: var(--signal); font-weight: 700; }
+  .pending { color: var(--signal); font-family: "JetBrains Mono", monospace; font-size: 0.82em; font-style: italic; }
+
+  /* ---- diagram ---- */
+  figure { margin: 1.8rem 0; }
+  figure svg { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; box-shadow: var(--shadow); }
+  figcaption { font-size: 0.82rem; color: var(--muted); margin-top: 0.7rem; }
+  /* SVG theming: var() does not resolve in presentation attributes, so style by class */
+  .dgm text { font-family: "JetBrains Mono", monospace; }
+  .dgm .t-mut { fill: var(--muted); }
+  .dgm .t-ink { fill: var(--ink-soft); }
+  .dgm .t-sig { fill: var(--signal); }
+  .dgm .t-acc { fill: var(--accent-ink); }
+  .dgm .ln { stroke: var(--hairline-strong); fill: none; }
+  .dgm .ln-mark { stroke: var(--ink-soft); fill: none; }
+  .dgm .c-sig { fill: var(--signal); }
+  .dgm .c-acc { fill: var(--accent); }
+  .dgm .panel { fill: var(--surface-2); stroke: var(--hairline); }
+  .dgm .serif { font-family: "Spectral", serif; }
+
+  ul, ol { padding-left: 1.2rem; }
+  li { margin: 0.35rem 0; }
+  hr { border: none; border-top: 1px solid var(--hairline); margin: 3rem 0; }
+
+  footer { border-top: 1px solid var(--hairline); margin-top: 3rem; padding-top: 1.6rem; font-size: 0.85rem; color: var(--muted); }
+  footer .mono { font-size: 0.78rem; }
+
+  @media (max-width: 680px) {
+    body { font-size: 17px; }
+    .stats { grid-template-columns: 1fr; }
+    .code-pair { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    a { transition: color .15s ease; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,500;0,600;0,700;1,500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500;600&display=swap">
+
+<div class="wrap">
+
+<header class="mast">
+  <span class="eyebrow">FALCON / FN-DSA · implementation study</span>
+  <h1>Two Faithful Falcons</h1>
+  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. We measured how often, and where it bites.</p>
+  <div class="meta">
+    <span><b>Independent implementation</b> · Julia, from the spec</span>
+    <span><b>Reference</b> · round-3 v1.2 C &amp; Python</span>
+    <span><b>Artifact-backed</b> · every number has a script</span>
+  </div>
+</header>
+
+<div class="col">
+
+<div class="stats">
+  <div class="stat">
+    <div class="k">Reproduction</div>
+    <div class="v good">byte-exact</div>
+    <div class="d">Our signatures equal the C reference's, bit for bit, on every recorded vector.</div>
+  </div>
+  <div class="stat">
+    <div class="k">New divergence (A2)</div>
+    <div class="v sig">7.5×10⁻⁶</div>
+    <div class="d">Complex division + <span class="mono">D11</span> change the signature — always at the key-recovery position.</div>
+  </div>
+  <div class="stat">
+    <div class="k">Verification speed</div>
+    <div class="v good">fastest</div>
+    <div class="d">Beats every C build we measured; 235–245× the Python reference.</div>
+  </div>
+</div>
+
+<div class="abstract">
+  <span class="eyebrow">Abstract</span>
+  <p>FALCON — standardized by NIST as FN-DSA — is the only selected signature whose output is a function of floating-point arithmetic, and its specification's precision analysis is about the sampled <em>distribution</em>, not about whether two conforming implementations produce the same bytes. We wrote an independent implementation in Julia, from the specification, and reconciled it with the C reference until it reproduces the reference's signatures <strong>byte for byte</strong>. That reconciliation exposes three classes of place where the specification does not determine the intermediate values: how an operation is spelled, a constant that cannot be derived from the published parameters, and a smoothing parameter that is used but not printed.</p>
+  <p>Two spellings — complex division and the <span class="mono">D11</span> entry of LDL* — change the signature at ≈ 7.5×10⁻⁶ per signature, always at the last two sampler calls: the positions where ePrint 2024/1709 (Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025) turns a single discrepant pair into full key recovery. Unlike the perturbations that paper studies, these are differences between the <em>specification</em> and the <em>reference</em>, present in both of the reference's signing modes, and not removed by its countermeasure. We reproduce that paper's mechanism independently and check its Heuristic 1 directly, which it does not.</p>
+</div>
+
+<span class="secnum">01 — The question</span>
+<h2>Does the specification determine the signature?</h2>
+
+<p>FALCON computes its output through floating-point arithmetic: its Gaussian sampler runs a fast-Fourier nearest-plane recursion over <code class="inl">Complex{Float64}</code>, and the sampled integers — and therefore the signature — are a function of the exact floating-point values that recursion produces. ML-DSA (FIPS&nbsp;204) and SLH-DSA (FIPS&nbsp;205) are integer- and hash-based; given the same key, message, and randomness they return the same bytes on any conforming implementation, by construction. FALCON carries no such guarantee, and its specification does not intend to: §2.5.2 analyzes floating-point precision through a Rényi-divergence argument about the sampled <em>distribution</em>, and §4.1 treats C's <code class="inl">double</code> as only needing to "match at least" IEEE-754. Both statements are about the distribution, not about whether two implementations agree bit for bit.</p>
+
+<p>That distinction is now load-bearing. The FIPS&nbsp;206 status update (Perlner, NIST, Sept 2025) indicates the standard will fix the order of floating-point operations, forbid fused multiply-add, and require implementations to match known-answer tests bit for bit. <strong>If the standard requires bit-exact agreement, then "does the specification determine the intermediate values?" becomes a normative question.</strong> We answer it by building a second implementation and measuring exactly where it disagrees with the reference.</p>
+
+<h3>Why Julia — honestly</h3>
+<p>We chose Julia because we expected it to be fast: native arrays and a reputation for numerical performance suggested the matrix-heavy parts (FFT, NTT, Gram matrix) would be quick to write and quick to run. That was only partly borne out (§6). There is a second reason that is genuine but was recognized only afterward, and we state it as such. FALCON's security-relevant timing variability has two sources — <em>algorithmic</em> (the rejection sampler's data-dependent loop) and <em>implementational</em> (GC, JIT, bounds checks, dispatch). A garbage-collected, JIT-compiled language makes the second impossible to close — which makes it a clean instrument for studying specification-level variance undisguised by implementation-level variance. A language that cannot hide its own runtime variance is exactly the one in which the specification's variance shows up plainly. We did not pick Julia for that reason, but it is why the choice turned out to fit this question.</p>
+
+<span class="secnum">02 — Underdetermination</span>
+<h2>Three places the specification leaves open</h2>
+
+<p>Reconciling our implementation with the reference, stage by stage on raw 64-bit patterns, splits the floating-point path into three groups: primitives that agree with no change (the FFT family and the whole <span class="mono">B0</span> matrix, 5120/5120 doubles), three computations that agree only once spelled the reference's way, and one constant stored under a different convention. The three spellings are algebraically identical and round differently. Here are the two implementation patterns for the first two, as running code.</p>
+
+<h3>(a) Complex division</h3>
+<p>The specification gives no formula; a reader uses the language's complex division — Smith's algorithm, in both Julia and Python. The reference forms the reciprocal explicitly. Smith's is the numerically better choice; the reference's is the one the KATs encode.</p>
+<div class="code-pair">
+<pre class="pat-s"><span class="lbl">Pattern S — spec reader (Julia's /)</span><span class="cm"># Smith's algorithm; numerically better</span>
+ComplexF64[ f[i] / g[i]
+            for i in eachindex(f) ]</pre>
+<pre class="pat-c"><span class="lbl">Pattern C — reference (FPC_DIV)</span>br = real(b); bi = imag(b)
+m  = 1.0 / (br*br + bi*bi)
+br *= m; bi *= -m
+ComplexF64(ar*br - ai*bi,
+           ar*bi + ai*br)</pre>
+</div>
+
+<h3>(b) The <span class="mono">D11</span> entry of LDL*</h3>
+<p>Algorithm&nbsp;8 and the Python reference compute <span class="mono">D11</span> with three multiplications; the C reference keeps the quotient the other way round and folds, doing one. Equal because <span class="mono">G00</span> is Hermitian, hence real.</p>
+<div class="code-pair">
+<pre class="pat-s"><span class="lbl">Pattern S — Algorithm 8 / Python</span><span class="cm"># three multiplications</span>
+L10 = div_fft(G[2,1], G[1,1])
+D11 = sub_fft(G[2,2],
+        mul_fft(mul_fft(L10,
+          adj_fft(L10)), G[1,1]))</pre>
+<pre class="pat-c"><span class="lbl">Pattern C — Zf(poly_LDL_fft)</span><span class="cm"># one multiplication</span>
+G01 = adj_fft(G[2,1])
+mu  = div_fft(G01, G[1,1])
+L10 = adj_fft(mu)
+D11 = sub_fft(G[2,2],
+        mul_fft(mu, G[2,1]))</pre>
+</div>
+
+<p>The third spelling <strong>(c)</strong> is the reference's hand-unrolled bottom two levels of <span class="mono">ffSampling</span>, folding the split/merge twiddles into <span class="mono">1/√2</span> and <span class="mono">1/√8</span>. All three are switched independently by <code class="inl">with_spec_spelling(f; cdiv, ldl, ffsampling)</code>, defaulting to the reference's spelling — and that independence is the whole point: it lets us attribute a divergence to one formula. Two more classes are constants: <strong>(II)</strong> <span class="mono">fpr_inv_sigma</span> is not the correctly rounded reciprocal of the published σ (§5), and <strong>(III)</strong> σ_min uses a smoothing parameter ε that the text never prints.</p>
+
+<span class="secnum">03 — Propagation</span>
+<h2>Which choices reach the signature</h2>
+
+<p>We sign each of 100 keys many times with two spellings on identical key, message, and PRNG state, and count how often the signatures differ. Before measuring, the harness prints how many of the tree's 9728 doubles each arm moves, so no zero is a silent no-op.</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>Arm</th><th>Perturbs</th><th>Quantity</th><th class="num">Events</th><th class="num">Rate</th></tr></thead>
+<tbody>
+<tr class="hl"><td>A2 — cplx div + D11</td><td>Class I (a,b)</td><td>centre</td><td class="num">3 / 400k</td><td class="num">7.5×10⁻⁶</td></tr>
+<tr><td>A1 — unrolled levels</td><td>Class I (c)</td><td>centre</td><td class="num">5 / 100k</td><td class="num">5.0×10⁻⁵</td></tr>
+<tr><td>A1′ — unrolled, 400k</td><td>Class I (c)</td><td>centre</td><td class="num" id="c-a1-400"><span class="pending">measuring…</span></td><td class="num" id="c-a1-400r"></td></tr>
+<tr><td>A2a — cplx div alone</td><td>Class I (a)</td><td>centre</td><td class="num" id="c-a2a"><span class="pending">measuring…</span></td><td class="num">0 / 100k</td></tr>
+<tr><td>A2b — D11 alone</td><td>Class I (b)</td><td>centre</td><td class="num" id="c-a2b"><span class="pending">measuring…</span></td><td class="num">0 / 100k</td></tr>
+<tr><td>B — fpr_inv_sigma</td><td>Class II</td><td><strong>width</strong></td><td class="num">0 / 100k</td><td class="num">0</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>A1 is a positive control</strong>: it is exactly the <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> difference of ePrint 2024/1709 §6.1, and its rate lands on their Table&nbsp;2. <strong>B is a negative control</strong>, and its zero is <em>expected from theory</em>: it perturbs the width, which Lemma&nbsp;2 of that paper bounds at ≈10⁻¹¹ — six orders below our resolution, so the zero carries no information and we do not present it as a finding. <strong>A2 is the arm that is not in that paper, and it is not zero.</strong></p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-labelledby="figtitle figdesc">
+  <title id="figtitle">Where the sampler is sensitive, and how a spelling flips the output</title>
+  <desc id="figdesc">The 2n=1024 sampler calls along the ffSampling traversal, with the first two and last two calls marked as sensitive, and a number-line inset showing a near-integer centre straddled by floor.</desc>
+  <text class="t-mut" x="28" y="34" font-size="11" letter-spacing="1">2n = 1024 SAMPLER CALLS · ffSampling TRAVERSAL</text>
+  <line class="ln" x1="28" y1="70" x2="732" y2="70" stroke-width="2"/>
+  <g class="ln" stroke-width="1.5">
+    <line x1="120" y1="64" x2="120" y2="76"/><line x1="220" y1="64" x2="220" y2="76"/>
+    <line x1="320" y1="64" x2="320" y2="76"/><line x1="420" y1="64" x2="420" y2="76"/>
+    <line x1="520" y1="64" x2="520" y2="76"/><line x1="620" y1="64" x2="620" y2="76"/>
+  </g>
+  <g>
+    <circle class="c-sig" cx="40" cy="70" r="7"/>
+    <circle class="c-sig" cx="66" cy="70" r="7"/>
+    <circle class="c-sig" cx="694" cy="70" r="7"/>
+    <circle class="c-sig" cx="720" cy="70" r="7"/>
+  </g>
+  <text class="t-sig" x="30" y="102" font-size="11">calls 1, 2</text>
+  <text class="t-sig" x="640" y="102" font-size="11">calls 2n−1, 2n</text>
+  <text class="t-mut" x="285" y="102" font-size="11">interior: 0 in 1.02×10⁸ draws</text>
+  <text class="t-ink serif" x="30" y="130" font-size="13">P(integer centre) = 1/q ≈ 8×10⁻⁵</text>
+  <text class="t-ink serif" x="500" y="130" font-size="13">1/‖(g,−f)‖² ≈ 6×10⁻⁵</text>
+  <text class="t-sig serif" x="560" y="152" font-size="12">→ full key recovery</text>
+
+  <g transform="translate(0,196)">
+    <rect class="panel" x="28" y="0" width="704" height="86" rx="10"/>
+    <text class="t-mut" x="46" y="24" font-size="10.5" letter-spacing="1">THE floor STRADDLE · s = ⌊μ⌋</text>
+    <line class="ln" x1="120" y1="58" x2="640" y2="58" stroke-width="1.5"/>
+    <line class="ln-mark" x1="380" y1="44" x2="380" y2="72" stroke-width="1.5"/>
+    <text class="t-ink" x="366" y="84" font-size="11">−267</text>
+    <circle class="c-acc" cx="372" cy="58" r="5"/>
+    <circle class="c-sig" cx="389" cy="58" r="5"/>
+    <text class="t-acc" x="120" y="40" font-size="11">μ = −267.00000000000006 → s = −268</text>
+    <text class="t-sig" x="404" y="44" font-size="11">μ = −267 → s = −267</text>
+  </g>
+</svg>
+<figcaption>The sampler is sensitive only at a near-integer centre, and near-integer centres occur only at the first two and last two of the 2n calls (ePrint 2024/1709, Heuristic&nbsp;1 — which we confirm directly, §4). A discrepancy of 6×10⁻¹⁴ in μ lands the two spellings on opposite sides of an integer; <span class="mono">floor</span> turns that into a difference of 1 in the sampled value, and the byte stream desynchronizes. All three A2 divergences are of exactly this shape.</figcaption>
+</figure>
+
+<p>All three A2 divergences carry the mechanism exactly — three of three at call 2n−1 or 2n, three of three straddling an integer, three of three with the leaf standard deviation <em>bit-identical</em> between runs, so the divergence is carried entirely by the centre:</p>
+<pre><span class="cm"># scripts/first_divergence.jl</span>
+key 70 sig  534   call 1023/1024   mu -267.00000000000006  vs -267
+key 65 sig 1239   call 1023/1024   mu  337                 vs  336.99999999999994
+key 68 sig 1885   call 1024/1024   mu  285.99999999999989  vs  286</pre>
+
+<span class="secnum">04 — Positioning</span>
+<h2>What is new, and what is not</h2>
+
+<p>The honest positioning is most of the contribution. The arithmetic mechanism, the fact that the reference's two signing modes diverge, and the sampler's insensitivity to its width are all results of ePrint 2024/1709. We reproduce them independently and add two things.</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th></th><th>ePrint 2024/1709</th><th>This work</th></tr></thead>
+<tbody>
+<tr><td>Perturbation source</td><td>FMA; the reference's two signing modes</td><td><strong>the spec vs the reference</strong></td></tr>
+<tr><td>Mechanism</td><td>Lemma 1 (centre) / Lemma 2 (width)</td><td>same — reproduced independently</td></tr>
+<tr><td>Unrolled diff (I c)</td><td>identified §6.1, countermeasure §7.2</td><td>reproduced as positive control (A1)</td></tr>
+<tr class="hl"><td>Cplx div, D11 (I a,b)</td><td><strong>not present</strong></td><td><strong>7.5×10⁻⁶ at key-recovery position; not fixed by §7.2</strong></td></tr>
+<tr><td>Heuristic 1</td><td>consequence measured</td><td>cause measured directly</td></tr>
+<tr><td>Even ‖(g,−f)‖²</td><td>noted as a C idiosyncrasy</td><td>reproduced independently</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The one new empirical fact is A2. Its significance is not a new mechanism — it is Lemma&nbsp;1 — but a different <em>source</em>. The paper's two sources both live inside the reference: FMA is a build flag, and <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> are two entry points their §7.2 countermeasure reconciles. Complex division and <span class="mono">D11</span> differ between the <strong>specification</strong> and the reference, so they sit in <em>both</em> signing modes and survive that countermeasure. For a standard that intends bit-exact KATs, this is the difference between "the two implementations should be made to agree" and "the text must say which of two equal formulas to use."</p>
+
+<div class="note">
+<span class="eyebrow">We were wrong first, three times</span>
+An earlier framing claimed specification underdetermination alone suffices, "no different build needed" — a rediscovery of §6.1, because a single flag we had not read carefully was moving only Class&nbsp;I(c). And a still-earlier claim, "these differences never reach the signature," rested on 480 signatures, which cannot distinguish 10⁻⁵ from zero. Reading the paper, then separating the three spellings and measuring at scale, is what produced the correct and narrower claim.
+</div>
+
+<h3>Heuristic 1, measured directly</h3>
+<p>ePrint 2024/1709 measures the <em>consequence</em> of Heuristic 1 (its Tables 2, 4) and notes it cannot be made a theorem. We measure the <em>cause</em> — how often each call's centre is within 10⁻⁹ of an integer — in an implementation written from the specification, not derived from theirs.</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>Position</th><th class="num">Measured</th><th class="num">Heuristic 1</th></tr></thead>
+<tbody>
+<tr><td>calls 1, 2</td><td class="num">8.5×10⁻⁵</td><td class="num">8.14×10⁻⁵</td></tr>
+<tr><td>calls 2n−1, 2n</td><td class="num">7.0×10⁻⁵</td><td class="num">6.08×10⁻⁵</td></tr>
+<tr><td>calls 3 … 2n−2</td><td class="num">0 / 1.02×10⁸</td><td class="num">≈ 0</td></tr>
+</tbody>
+</table>
+</div>
+<p>Both ends agree inside Poisson error; the interior is empty across 1.02×10⁸ draws. All 100 keys have <strong>even</strong> ‖(g,−f)‖², reproducing the C-reference idiosyncrasy that §7.1 of that paper flags — from an implementation that followed the C key generation without knowing it mattered.</p>
+
+<span class="secnum">05 — Performance</span>
+<h2>How fast, against what</h2>
+
+<p>One machine (4 cores, x86-64 with FMA — the single-machine limit is real and unhidden). We vary what we can: two compilers, three optimization levels, emulated vs native floating point for C; three optimization levels for Julia; and report medians over the run-to-run distribution.</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>Build</th><th class="num">keygen</th><th class="num">sign</th><th class="num">verify</th></tr></thead>
+<tbody>
+<tr class="hl"><td>This work · Julia −O2</td><td class="num">9.78</td><td class="num">0.89</td><td class="num win">0.015</td></tr>
+<tr><td>C native · clang −O3 −march=native</td><td class="num">5.02</td><td class="num">0.135</td><td class="num">0.017</td></tr>
+<tr><td>C native · gcc −O2</td><td class="num">5.91</td><td class="num">0.171</td><td class="num">0.026</td></tr>
+<tr><td>C emulated · clang −O3 (deploy)</td><td class="num">10.71</td><td class="num">1.58</td><td class="num">0.020</td></tr>
+<tr><td>C emulated · gcc −O2</td><td class="num">12.33</td><td class="num">1.79</td><td class="num">0.024</td></tr>
+<tr><td>Python reference</td><td class="num">2657</td><td class="num">18.39</td><td class="num">3.52</td></tr>
+</tbody>
+</table>
+</div>
+<figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;color:var(--muted);font-size:0.8rem;">FALCON-512, median milliseconds per operation. Green = fastest of all builds measured.</figcaption>
+
+<p>Reading the ratios from the Julia −O2 row:</p>
+<ul>
+<li><strong>Verification is the fastest measured, C included</strong> — 0.015&nbsp;ms vs the best C build's 0.0165 (≈1.1×) and gcc −O2's 0.026 (≈1.6×), and <strong>235× faster than Python</strong>. Verification is NTT-heavy integer work with no sampler and no big integers — where Julia's arrays and LLVM are at their best.</li>
+<li><strong>Signing ≈1.8× faster than the emulated C build</strong> (the one most deployed FALCON runs), <strong>20× faster than Python</strong>, and ≈6× slower than native-FP C — the floating-point sampler is where C's SSE2 doubles win.</li>
+<li><strong>Key generation ≈9.78&nbsp;ms — faster than every emulated C build</strong> and <strong>272× faster than Python</strong>, but ≈1.9× slower than native C. Its big integers live in <code class="inl">BigInt</code> against the reference's 31-bit-limb RNS.</li>
+</ul>
+
+<p>At n=1024 the pattern sharpens: verification is again the fastest measured (0.031&nbsp;ms vs best C 0.035, 245× Python), signing is ≈1.7× faster than emulated C and 18.8× faster than Python, and key generation is 296× faster than Python but now ≈1.3× slower than even emulated C — the <code class="inl">BigInt</code>-vs-RNS gap widens with degree. Notably, <strong>Julia −O2 wins at 512 and −O3 wins at 1024</strong>: the best level is per-operation, and reporting one level would misrepresent the implementation. Key generation is also the endpoint of a long optimization — 9610&nbsp;ms in the first working version — reached almost entirely by removing allocation, not by high-level array rewriting.</p>
+
+<span class="secnum">06 — Scope &amp; limits</span>
+<h2>Constant time, and what we can't yet say</h2>
+
+<p>This implementation is <strong>not</strong> constant-time and does not try to be. Where the code does something a constant-time implementation could not, a <code class="inl">CONSTANT TIME:</code> comment marks it. A Julia implementation cannot close the implementation-level channels (GC, JIT, bounds checks, dispatch) at all — which is precisely why it is a clean instrument for the specification-level question here, and a poor vehicle for a deployable signer. We state this rather than claim a side-channel contribution we did not make.</p>
+
+<p>Open, and marked as such:</p>
+<ul>
+<li><strong>A2a / A2b are not yet separated</strong> — complex division alone and <span class="mono">D11</span> alone each gave 0/100k; 100k cannot distinguish 7.5×10⁻⁶ from 0. A 400k run of each is <span class="pending">measuring</span> (<span id="lim-a2a">…</span>).</li>
+<li><strong>A2 rarer than A1 is suggested, not established</strong> — the Poisson intervals touch. A 400k run of A1 is <span class="pending">measuring</span> (<span id="lim-a1">…</span>).</li>
+<li><strong>The §6.1 asymmetry</strong> ePrint 2024/1709 leaves unexplained, we also do not resolve.</li>
+<li><strong>FALCON-1024 divergence</strong> for A2 and A1 is <span class="pending">measuring</span> (<span id="lim-1024">…</span>).</li>
+</ul>
+
+<span class="secnum">07 — Recommendations</span>
+<h2>What FIPS 206 should do</h2>
+<p>If FIPS&nbsp;206 requires bit-exact KAT agreement:</p>
+<ol>
+<li><strong>Pin the spellings</strong> of complex division, <span class="mono">D11</span>, and the bottom-level <span class="mono">ffSampling</span> block — or, better, adopt ePrint 2024/1709 §7.1's structural fix (sample the centre with <span class="mono">round</span> not <span class="mono">floor</span>, and require ‖(g,−f)‖² odd), which removes the sensitivity itself. That also requires relaxing the reference's key-generation parity condition, which currently forces ‖(g,−f)‖² even.</li>
+<li><strong>Publish <span class="mono">fpr_inv_sigma</span> at full precision</strong> rather than leaving it to be derived from a rounded σ, and say whether intermediate values are within KAT scope.</li>
+<li><strong>State σ_min's ε</strong>, or its derivation.</li>
+<li><strong>State the SamplerZ byte-assembly convention</strong> alongside the vectors.</li>
+</ol>
+
+<footer>
+<p><strong>Reproducing everything.</strong> Every figure is produced by a named script and re-checkable without a C compiler except where noted.</p>
+<p class="mono">julia --project=falcon -e 'using Pkg; Pkg.test()'  &nbsp;·&nbsp; the "byte for byte" testset<br>
+julia … falcon/scripts/divergence_rate.jl 100 1000  &nbsp;·&nbsp; §3<br>
+julia … falcon/scripts/heuristic1_check.jl 100 1000  &nbsp;·&nbsp; §4<br>
+sh falcon/scripts/bench_all.sh  &nbsp;·&nbsp; §5</p>
+<p>Manuscript: <span class="mono">docs/paper.md</span> · measurements: <span class="mono">docs/debug_log.md</span> #046–#056 · draft NIST comment: <span class="mono">docs/nist_comment_draft.md</span>. Suite: 61521 passing.</p>
+</footer>
+
+</div>
+</div>
