@@ -117,12 +117,17 @@ function main(args)
     report("sign_tree", n, t)
 
     # --- verify --------------------------------------------------------------
+    # Measured **from bytes**, i.e. `pubkey_from_bytes` + `falcon_verify`, because
+    # C's `falcon_verify` takes the encoded public key and decodes it on every
+    # call.  Timing our parsed-key form against that would be comparing two
+    # different amounts of work and would flatter us by the cost of a decode.
+    pkb = pubkey_bytes(pk)
+    @assert falcon_verify(pubkey_from_bytes(pkb), msg, sig)
     t = Float64[]
     for _ in 1:nvf
         t0 = time_ns()
-        ok = falcon_verify(pk, msg, sig)
+        falcon_verify(pubkey_from_bytes(pkb), msg, sig)
         push!(t, (time_ns() - t0) / 1e6)
-        ok || error("bench: our own signature failed to verify")
     end
     report("verify", n, t)
 
