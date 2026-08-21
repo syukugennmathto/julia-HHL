@@ -18,11 +18,19 @@
 # computes `1/sigma` from Table 3.3 instead of transcribing the table therefore
 # builds a DIFFERENT expanded private key -- 444 of 512 leaves differ.
 #
-# It does not build different signatures.  Measured over 120 signatures at
-# n = 512 with identical key, message and PRNG state, not one of 61440
-# coefficients changed.  So the constant matters for a KAT on intermediate
-# values or on the expanded-key format, and not for a KAT on signatures.
-# Saying more than that would overstate it (docs/debug_log.md #053).
+# It does not build different signatures.  Measured over 100000 signatures at
+# n = 512 with identical key, message and PRNG state, not one of 51200000
+# coefficients changed (95% upper bound on the rate, 3e-5).  So the constant
+# matters for a KAT on intermediate values or on the expanded-key format, and
+# not for a KAT on signatures.
+#
+# The contrast is the point.  This constant perturbs the sampler's WIDTH, which
+# reaches `BerExp`'s comparison smoothly.  The three respellings of
+# docs/debug_log.md #048 perturb its CENTRE, which passes through `floor(mu)`,
+# and those DO change the signature -- 5 of the same 100000
+# (scripts/divergence_rate.jl, docs/debug_log.md #054).  Whether an
+# underdetermined choice reaches the signature depends on which quantity it
+# reaches, not on how large it is.
 #
 # Everything below is computed at 400 bits and compared on raw bit patterns.
 

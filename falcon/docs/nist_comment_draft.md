@@ -76,18 +76,37 @@ bit for bit (`FFT`, `iFFT`, `poly_split_fft`, `poly_merge_fft`, `poly_add`,
 three are what remain. Respelling them makes the expanded private key agree in
 all 5120 doubles at `logn = 9`.
 
-**They do not, however, change the signature.** Over 480 signatures at
-n = 512 with identical key, message and PRNG state, the two spellings did not
-differ in a single one of 245760 coefficients. The reason is margin:
-`BerExp` compares a fixed-point exponential against random bytes, and an ulp
-of slack in its argument flips that comparison with probability on the order
-of 2^-52 per draw.
+**They do change the signature, at a measurable rate.** Over 100000
+signatures at n = 512 with identical key, message and PRNG state, five
+diverged -- a rate of 5e-5. When one diverges, roughly 470 of its 512
+coefficients differ, because the byte stream desynchronises.
 
-**Suggestion.** If FIPS 206 requires bit-exact KAT agreement, the text should
-either give these three computations explicitly, or state that any
-algebraically equivalent formulation is acceptable and that the KATs are not
-to be read as pinning them. Either is fine; leaving it implicit means
-implementers will discover the difference the way we did.
+The mechanism is the one ePrint 2024/1709 identifies. All five divergences are
+nearly-integer centres:
+
+    call 1023   mu = 221.00000000000006   vs   220.99999999999997
+    call 1024   mu = 436.99999999999994   vs   437.00000000000011
+    call 1024   mu = 444.0                vs   443.99999999999977
+    call 1023   mu = -180.99999999999997  vs  -181.0000000000002
+    call 1023   mu =  60.000000000000007  vs   59.999999999999957
+
+`SamplerZ` begins `s = floor(mu)`, and `floor` is discontinuous, so a 1e-13
+discrepancy becomes a difference of 1 in `s`. All five are at call 1023 or
+1024 of 1024 -- positions 2n-2 and 2n-1, which is where that paper predicts
+the centres concentrate near integers.
+
+What we would add to it: 2024/1709 obtains its discrepancies by changing the
+*build* (FMA on or off, emulated against native against AVX2, dynamic against
+tree mode) -- different compilations of the same source. **A different build
+is not required.** Two implementations that both follow the specification
+suffice, because the specification does not say which of two algebraically
+equal formulas to use.
+
+**Suggestion.** If FIPS 206 requires bit-exact KAT agreement, the text must
+give these three computations explicitly. We had thought a second option was
+available -- to say that any algebraically equivalent formulation is
+acceptable -- and the measurement removed it: the formulations are not
+interchangeable in the presence of the sampler's `floor`.
 
 ### 2. `sigma` and `sigma_min` come from different `epsilon`
 
@@ -134,12 +153,15 @@ printed at length rather than a high-precision constant.
 
 **How much this matters.** An implementation that computes the reciprocal
 instead of transcribing the table builds a different expanded private key --
-444 of 512 tree leaves differ at `logn = 9`. It builds the *same signatures*:
-over 120 signatures with identical key, message and PRNG state, none of 61440
-coefficients changed. So this affects a KAT on intermediate values or on the
-expanded-key format, and not a KAT on signatures. We state that limit
-explicitly because the opposite reading would be the alarming one and it is
-not what we measured.
+444 of 512 tree leaves differ at `logn = 9`. Over 100000 signatures, measured
+the same way as section 1 above, it builds the *same signatures*: none of
+51200000 coefficients changed (95% upper bound on the rate, 3e-5).
+
+That contrast is the useful part. This constant perturbs the sampler's
+*width*, which enters `BerExp`'s comparison smoothly; section 1's differences
+perturb its *centre*, which passes through `floor`. Whether an
+underdetermined choice reaches the signature depends on which quantity it
+reaches, not on how large it is.
 
 **Suggestion.** If FIPS 206 keeps a precomputed reciprocal, publish the
 constant itself at full precision rather than leaving it to be derived from a
@@ -173,8 +195,15 @@ applies `bytes.fromhex(oc)[::-1]`).
   a directly seeded PRNG, which is what made the comparison possible
 - `test/vectors/cref_sign_kat.jl` — the reference's own signing output,
   recorded so the reproduction is checkable without a C compiler
-- `docs/debug_log.md` #046, #048, #050 — the measurements behind each claim,
-  including the hypotheses we tested and rejected
+- `scripts/divergence_rate.jl` — the 100000-signature measurement of both
+  section 1 and section 3, run at the same sample size
+- `scripts/first_divergence.jl` — for each divergent pair, the first sampler
+  call at which the two disagree, with both centres printed
+- `scripts/inv_sigma_audit.jl` — the ulp table in section 3
+- `docs/debug_log.md` #046, #048, #050, #053, #054 — the measurements behind
+  each claim, including the hypotheses we tested and rejected. #054 records
+  that we asserted the opposite of section 1's conclusion three times on a
+  480-signature sample before measuring at a sample size that could see it.
 
 We would be glad to supply anything further that is useful.
 
@@ -182,12 +211,16 @@ We would be glad to supply anything further that is useful.
 
 ## 日本語メモ（投稿時には削る）
 
-- 「浮動小数点が原因ではなかった」を**先に**書くのが要点。
-  NIST 側も 2024/1709（Sleeping Falcon）を意識しているので、
-  「丸めの差が署名を変える」という話と混同されると論点がぼける。
-  こちらの主張は逆で、**bit は違うが署名は変わらない**である。
+- 論点は 2024/1709（Sleeping Falcon）と**同じ機構**である。
+  違うのは摂動源で、あちらは**ビルド構成**（FMA の有無、fpemu 対
+  native 対 AVX2）、こちらは**仕様書に忠実な 2 つの実装**。
+  「違うビルドは要らない」が言いたいこと。混同されないよう
+  §1 の最後で明示的に差分を書いてある。
+- §1 と §3 の**対照**が本体。中心（`floor` を通る）は 5e-5 で伝播し、
+  幅（`BerExp` の比較を通る）は 0。「差の大きさ」ではなく
+  「差がどの量に届くか」で決まる、という一文が結論。
 - 3 番（`fpr_inv_sigma`）が最も具体的で、最も直しやすく、
-  最も「言われないと気づかない」。ここが本命かもしれない。
+  最も「言われないと気づかない」。かつ §1 の対照群として効く。
 - 4 番は round-3 の話なので、FIPS 206 が KAT 形式を変えるなら
   自動的に解消する。IPD を見てから残すか決める。
 - 分量は長すぎる。IPD を見て、既に解決している項を削れば適量になるはず。
