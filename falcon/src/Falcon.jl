@@ -51,7 +51,7 @@ export polysplit, polymerge
 # --- module 4 --------------------------------------------------------------
 export ntt, intt, ntt_roots, ntt_add, ntt_sub, ntt_mul, ntt_div
 export polymulq_ntt, polydivq, is_invertible_zq
-export ntt_ip!, intt_ip!, ntt_zetas, polymulq_fast, polymulq_fast!
+export ntt_ip!, intt_ip!, ntt_zetas, intt_zetas, polymulq_fast, polymulq_fast!
 
 # --- module 5 --------------------------------------------------------------
 export fft, ifft, fft_roots, unit_root, split_fft, merge_fft

@@ -485,6 +485,38 @@ function ntt_zetas(n::Integer)
     end
 end
 
+const _IZETA_CACHE = Dict{Int,Vector{UInt32}}()
+
+"""
+    intt_zetas(n) -> Vector{UInt32}
+
+The inverse transform's twiddles, `q - zetas[k]`, with the `1/n` scaling
+already folded into the one entry the final level uses (`k = 2`).
+
+Both foldings are here rather than in the loop because both were in the loop
+and both cost: the subtraction ran once per group, and `ninv` was recomputed by
+a modular exponentiation on *every call* to `intt_ip!`
+(docs/debug_log.md #039).  Memoised per degree, like `ntt_zetas`.
+"""
+function intt_zetas(n::Integer)
+    _check_degree(n)
+    return get!(_IZETA_CACHE, Int(n)) do
+        ni = Int(n)
+        z = ntt_zetas(ni)
+        iz = UInt32[UInt32(Q) - c for c in z]
+        if ni >= 8
+            # k = 2 is the single group of the last level (len = n/2); at n = 8
+            # the fused block is the whole transform and there is no such level.
+            ninv = UInt32(powermod(ni, Q - 2, Q))
+            ni > 8 && (iz[2] = _mulq(iz[2], ninv))
+        end
+        return iz
+    end
+end
+
+const _NINV_CACHE = Dict{Int,UInt32}()
+ntt_ninv(n::Integer) = get!(() -> UInt32(powermod(Int(n), Q - 2, Q)), _NINV_CACHE, Int(n))
+
 # Everything here is `UInt32`.  Both operands are reduced representatives in
 # [0, q) with q < 2^14, so a product is under 2^28 and fits without widening --
 # which lets LLVM emit a 32-bit magic multiply for the `% Q` instead of a 64-bit
@@ -512,6 +544,74 @@ bit-reversed order -- which is not a defect to be corrected but the input
 """
 function ntt_ip!(a::Vector{UInt32}, zetas::Vector{UInt32})
     n = length(a)
+    n >= 8 || return _ntt_ip_small!(a, zetas)
+
+    # Levels with len >= 8 are contiguous runs long enough for the vectoriser.
+    k = 1
+    len = n >> 1
+    @inbounds while len >= 8
+        start = 0
+        while start < n
+            k += 1
+            zeta = zetas[k]
+            @simd for j in (start + 1):(start + len)
+                t = _mulq(zeta, a[j + len])
+                a[j + len] = _subq(a[j], t)
+                a[j]       = _addq(a[j], t)
+            end
+            start += 2len
+        end
+        len >>= 1
+    end
+
+    # The last three levels, fused.  Measured per level at n = 512, the plain
+    # loop costs 0.67-0.92 ns per butterfly while len >= 16 and then 2.95, 3.71
+    # and 5.34 ns at len = 4, 2, 1 -- those three levels alone were 70% of the
+    # transform (docs/debug_log.md #039).  The reason is not arithmetic: at
+    # len = 1 the inner loop is one iteration, so there is nothing to vectorise
+    # and every butterfly pays full loop overhead and a round trip to memory.
+    #
+    # So they are done together, eight contiguous coefficients at a time, held
+    # in eight locals for all three levels.  One pass over the array instead of
+    # three, and no loop at all around the twelve butterflies.
+    #
+    # The zeta indices are the ones the loop above would have used: level `len`
+    # consumes k from n/(2*len)+1 to n/len, so block b takes n/8+b+1 at len = 4,
+    # n/4+2b+{1,2} at len = 2, and n/2+4b+{1,2,3,4} at len = 1.
+    nb = n >> 3
+    @inbounds for b in 0:(nb - 1)
+        o  = b << 3
+        x1 = a[o+1]; x2 = a[o+2]; x3 = a[o+3]; x4 = a[o+4]
+        x5 = a[o+5]; x6 = a[o+6]; x7 = a[o+7]; x8 = a[o+8]
+
+        ze = zetas[nb + b + 1]                                  # len = 4
+        t = _mulq(ze,x5); x5 = _subq(x1,t); x1 = _addq(x1,t)
+        t = _mulq(ze,x6); x6 = _subq(x2,t); x2 = _addq(x2,t)
+        t = _mulq(ze,x7); x7 = _subq(x3,t); x3 = _addq(x3,t)
+        t = _mulq(ze,x8); x8 = _subq(x4,t); x4 = _addq(x4,t)
+
+        za = zetas[2nb + 2b + 1]; zb = zetas[2nb + 2b + 2]      # len = 2
+        t = _mulq(za,x3); x3 = _subq(x1,t); x1 = _addq(x1,t)
+        t = _mulq(za,x4); x4 = _subq(x2,t); x2 = _addq(x2,t)
+        t = _mulq(zb,x7); x7 = _subq(x5,t); x5 = _addq(x5,t)
+        t = _mulq(zb,x8); x8 = _subq(x6,t); x6 = _addq(x6,t)
+
+        w1 = zetas[4nb+4b+1]; w2 = zetas[4nb+4b+2]              # len = 1
+        w3 = zetas[4nb+4b+3]; w4 = zetas[4nb+4b+4]
+        t = _mulq(w1,x2); x2 = _subq(x1,t); x1 = _addq(x1,t)
+        t = _mulq(w2,x4); x4 = _subq(x3,t); x3 = _addq(x3,t)
+        t = _mulq(w3,x6); x6 = _subq(x5,t); x5 = _addq(x5,t)
+        t = _mulq(w4,x8); x8 = _subq(x7,t); x7 = _addq(x7,t)
+
+        a[o+1]=x1; a[o+2]=x2; a[o+3]=x3; a[o+4]=x4
+        a[o+5]=x5; a[o+6]=x6; a[o+7]=x7; a[o+8]=x8
+    end
+    return a
+end
+
+"The plain loop, kept for n < 8 where the fused block does not apply."
+function _ntt_ip_small!(a::Vector{UInt32}, zetas::Vector{UInt32})
+    n = length(a)
     k = 1
     len = n >> 1
     @inbounds while len >= 1
@@ -519,7 +619,7 @@ function ntt_ip!(a::Vector{UInt32}, zetas::Vector{UInt32})
         while start < n
             k += 1
             zeta = zetas[k]
-            @simd for j in (start + 1):(start + len)
+            for j in (start + 1):(start + len)
                 t = _mulq(zeta, a[j + len])
                 a[j + len] = _subq(a[j], t)
                 a[j]       = _addq(a[j], t)
@@ -539,14 +639,86 @@ including the final division by `n`.
 """
 function intt_ip!(a::Vector{UInt32}, zetas::Vector{UInt32})
     n = length(a)
+    n >= 8 || return _intt_ip_small!(a, zetas)
+    ninv = ntt_ninv(n)
+    iz = intt_zetas(n)
+
+    # Mirror image of ntt_ip!: here it is the *first* three levels that are too
+    # short to vectorise, so they are fused into one register-resident pass.
+    # The inverse walks k downwards, so block b takes n-4b-{0,1,2,3} at len = 1,
+    # n/2-2b-{0,1} at len = 2, and n/4-b at len = 4.
+    nb = n >> 3
+    @inbounds for b in 0:(nb - 1)
+        o  = b << 3
+        x1 = a[o+1]; x2 = a[o+2]; x3 = a[o+3]; x4 = a[o+4]
+        x5 = a[o+5]; x6 = a[o+6]; x7 = a[o+7]; x8 = a[o+8]
+
+        w1 = iz[n - 4b];     w2 = iz[n - 4b - 1]
+        w3 = iz[n - 4b - 2]; w4 = iz[n - 4b - 3]
+        t = x1; x1 = _addq(t,x2); x2 = _mulq(w1, _subq(t,x2))
+        t = x3; x3 = _addq(t,x4); x4 = _mulq(w2, _subq(t,x4))
+        t = x5; x5 = _addq(t,x6); x6 = _mulq(w3, _subq(t,x6))
+        t = x7; x7 = _addq(t,x8); x8 = _mulq(w4, _subq(t,x8))
+
+        za = iz[(n >> 1) - 2b]
+        zb = iz[(n >> 1) - 2b - 1]
+        t = x1; x1 = _addq(t,x3); x3 = _mulq(za, _subq(t,x3))
+        t = x2; x2 = _addq(t,x4); x4 = _mulq(za, _subq(t,x4))
+        t = x5; x5 = _addq(t,x7); x7 = _mulq(zb, _subq(t,x7))
+        t = x6; x6 = _addq(t,x8); x8 = _mulq(zb, _subq(t,x8))
+
+        ze = iz[(n >> 2) - b]
+        t = x1; x1 = _addq(t,x5); x5 = _mulq(ze, _subq(t,x5))
+        t = x2; x2 = _addq(t,x6); x6 = _mulq(ze, _subq(t,x6))
+        t = x3; x3 = _addq(t,x7); x7 = _mulq(ze, _subq(t,x7))
+        t = x4; x4 = _addq(t,x8); x8 = _mulq(ze, _subq(t,x8))
+
+        a[o+1]=x1; a[o+2]=x2; a[o+3]=x3; a[o+4]=x4
+        a[o+5]=x5; a[o+6]=x6; a[o+7]=x7; a[o+8]=x8
+    end
+
+    # `iz` already carries both the negation and, at k = 2, the 1/n scaling, so
+    # the inner loop is a load and a butterfly with nothing else in it.
+    k = n >> 3
+    len = 8
+    folded = false
+    @inbounds while len < n
+        (2len == n) && (folded = true)
+        start = 0
+        while start < n
+            zeta = iz[k]
+            k -= 1
+            @simd for j in (start + 1):(start + len)
+                t = a[j]
+                u = a[j + len]
+                a[j]       = _addq(t, u)
+                a[j + len] = _mulq(zeta, _subq(t, u))
+            end
+            start += 2len
+        end
+        len <<= 1
+    end
+
+    # At n = 8 the register block is the whole transform, so there was no final
+    # level to fold 1/n into and every coefficient still needs it.
+    m = folded ? (n >> 1) : n
+    @inbounds @simd for i in 1:m
+        a[i] = _mulq(a[i], ninv)
+    end
+    return a
+end
+
+"The plain loop, kept for n < 8 where the fused block does not apply."
+function _intt_ip_small!(a::Vector{UInt32}, zetas::Vector{UInt32})
+    n = length(a)
     k = n
     len = 1
     @inbounds while len < n
         start = 0
         while start < n
-            zeta = UInt32(Q) - zetas[k]         # the inverse butterfly's -zeta
+            zeta = UInt32(Q) - zetas[k]
             k -= 1
-            @simd for j in (start + 1):(start + len)
+            for j in (start + 1):(start + len)
                 t = a[j]
                 a[j]       = _addq(t, a[j + len])
                 a[j + len] = _mulq(zeta, _subq(t, a[j + len]))
@@ -599,11 +771,21 @@ end
 Allocating wrapper around [`polymulq_fast!`](@ref), for callers that do not
 have buffers to hand.
 """
-# Reduce one coefficient into [0, q) without a division in the common cases.
+# Reduce one coefficient into [0, q), branch-free.
+#
+# The obvious form -- test for the two common ranges and fall back to `mod` --
+# looks cheaper and is not.  A signature's `s2` is centred, so its coefficients
+# are positive and negative in roughly equal measure and in no predictable
+# order; the branch is a coin flip taken 512 times per verification and the
+# mispredictions cost more than the arithmetic saves (docs/debug_log.md #039).
+#
+# `x % Q` is `rem`, so with `Q` a literal constant LLVM emits a multiply-shift
+# and the result lands in (-Q, Q).  `r >> 63` is then all-ones exactly when `r`
+# is negative, so `Q & (r >> 63)` is the conditional addition with no branch at
+# all.
 @inline function _reduce_u32(x::Int)
-    0 <= x < Q && return UInt32(x)
-    -Q < x < 0 && return UInt32(x + Q)
-    return UInt32(mod(x, Q))
+    r = x % Q
+    return UInt32(r + (Q & (r >> 63)))
 end
 
 function polymulq_fast(f::AbstractVector{<:Integer}, g::AbstractVector{<:Integer})

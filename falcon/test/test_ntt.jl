@@ -227,4 +227,34 @@
             @test (@allocated Falcon.ntt_ip!(b, z)) == 0
         end
     end
+
+    @testset "the inverse twiddle table folds what it claims to fold" begin
+        # Regression test for docs/debug_log.md #039.  intt_zetas precomputes
+        # q - zeta *and* multiplies the single entry the last level uses by 1/n,
+        # so a mistake here scales the whole transform by a constant and would
+        # show up only as a wrong signature.  The relationship is asserted
+        # directly rather than via a round trip, which would hide a
+        # compensating error.
+        for n in (8, 16, 64, 512, 1024)
+            z = ntt_zetas(n)
+            iz = intt_zetas(n)
+            @test length(iz) == n
+            ninv = Falcon.ntt_ninv(n)
+            @test mod(Int(ninv) * n, Q) == 1
+            for k in 1:n
+                plain = mod(Q - Int(z[k]), Q)
+                if k == 2 && n > 8
+                    # the folded entry: the last level's only group
+                    @test Int(iz[k]) == mod(plain * Int(ninv), Q)
+                else
+                    @test Int(iz[k]) == plain
+                end
+            end
+        end
+        # n = 8: the fused block is the whole transform, so nothing is folded
+        # and every coefficient is scaled in the final pass instead.
+        let z = ntt_zetas(8), iz = intt_zetas(8)
+            @test all(k -> Int(iz[k]) == mod(Q - Int(z[k]), Q), 1:8)
+        end
+    end
 end

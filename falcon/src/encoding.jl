@@ -367,69 +367,75 @@ Without them a signature could be altered without becoming invalid.
 """
 function decompress_sig(x::AbstractVector{UInt8}, slen::Integer, n::Integer)
     length(x) > slen && return nothing
-    total = 8 * length(x)
-
-    # The sign-and-7-low-bits header is read as a byte rather than as eight
-    # calls to a bit accessor.  Same bits, and it takes the header from eight
-    # shift-and-mask sequences to one or two -- decompress was ~14% of
-    # verification before this (docs/debug_log.md #038).  The unary tail still
-    # goes bit by bit, because that is what it is.
-    @inline function bit(i::Int)
-        @inbounds return ((x[(i - 1) >> 3 + 1] >> (7 - ((i - 1) & 7))) & 1) == 1
-    end
-    # Eight bits starting at 1-based bit position `i`, which may straddle a byte.
-    @inline function byte_at(i::Int)
-        b = (i - 1) >> 3 + 1
-        off = (i - 1) & 7
-        @inbounds hi = UInt16(x[b]) << 8
-        @inbounds lo = b + 1 <= length(x) ? UInt16(x[b + 1]) : UInt16(0)
-        return UInt8(((hi | lo) >> (8 - off)) & 0xff)
-    end
-
+    L = length(x)
     v = Vector{Int}(undef, n)
+
+    # A 64-bit window, MSB-first, refilled a byte at a time.  `acc` holds `nb`
+    # valid bits left-aligned; everything below them is zero, which is what
+    # makes `leading_zeros` usable on the unary run and `acc == 0` usable as
+    # the "all remaining bits are zero" check at the end.
+    #
+    # Two earlier attempts at this are worth recording.  Reading bit by bit
+    # through a closure cost 3.9 us per signature.  Reading the unary run a
+    # byte at a time with `leading_zeros` was *slower* than that, because the
+    # byte accessor straddles bytes and needs two loads while the runs are
+    # almost always length 0 or 1 (docs/debug_log.md #038).  The window fixes
+    # both: the header is one shift and the run is one `leading_zeros` on a
+    # register that is already loaded.
+    acc = UInt64(0)
+    nb = 0
+    p = 1
     got = 0
-    i = 1
     @inbounds while got < n
-        i + 7 <= total || return nothing
-        h = byte_at(i)
+        while nb <= 56 && p <= L
+            acc |= UInt64(x[p]) << (56 - nb)
+            nb += 8
+            p += 1
+        end
+        nb >= 8 || return nothing
+        h = UInt8(acc >> 56)
+        acc <<= 8
+        nb -= 8
         neg = (h & 0x80) != 0
         low = Int(h & 0x7f)
-        i += 8
-        # The unary tail, with the overwhelmingly common case first.
-        #
-        # A first attempt read it a byte at a time and used `leading_zeros`,
-        # reasoning that one instruction beats k loop iterations.  It was
-        # *slower* -- 0.0047 ms to 0.0061 -- because `byte_at` costs two loads
-        # and a shift and the runs are almost always length 0 or 1, so the
-        # clever path paid for itself on every coefficient and saved nothing
-        # (docs/debug_log.md #038).  The high bits are Golomb-Rice coded: the
-        # coefficients are Gaussian with sigma ~ 165, so `high = coef >> 7` is
-        # 0 or 1 the great majority of the time.
+
         high = 0
-        i <= total || return nothing
-        if bit(i)
-            i += 1                               # high = 0: one bit test
-        else
-            while true
-                i += 1
-                high += 1
-                i <= total || return nothing
-                bit(i) && break
-                high > 2040 && return nothing    # runaway unary run
+        while true
+            while nb <= 56 && p <= L
+                acc |= UInt64(x[p]) << (56 - nb)
+                nb += 8
+                p += 1
             end
-            i += 1                               # consume the terminating 1
+            nb >= 1 || return nothing
+            lz = leading_zeros(acc)
+            if lz >= nb
+                # The window is all zeros: the run continues past what is
+                # loaded.  Consume the lot and go round again -- but only if
+                # there is more to load, otherwise the encoding is truncated.
+                high += nb
+                acc = UInt64(0)
+                nb = 0
+                high > 2040 && return nothing        # runaway unary run
+                p <= L || return nothing
+                continue
+            end
+            high += lz
+            acc <<= (lz + 1)                          # the zeros and the 1
+            nb -= (lz + 1)
+            break
         end
+        high > 2040 && return nothing
+
         coef = low + (high << 7)
-        (coef == 0 && neg) && return nothing     # -0 is not a valid encoding
+        (coef == 0 && neg) && return nothing          # -0 is not a valid encoding
         got += 1
         v[got] = neg ? -coef : coef
     end
-    # every remaining bit must be zero.  Whole bytes are checked as bytes.
-    @inbounds while i <= total && ((i - 1) & 7) != 0
-        bit(i) && return nothing
-        i += 1
-    end
-    @inbounds for b in ((i - 1) >> 3 + 1):length(x)
+
+    # Every remaining bit must be zero: the loaded-but-unconsumed ones sit at
+    # the top of `acc`, and whatever has not been loaded is still in `x`.
+    acc == UInt64(0) || return nothing
+    @inbounds for b in p:L
         x[b] == 0x00 || return nothing
     end
     return v
@@ -476,9 +482,13 @@ function decode_signature(bytes::AbstractVector{UInt8})
     logn = Int(head & 0x0f)
     1 <= logn <= 10 || throw(ArgumentError("bad degree in header: logn = $logn"))
     n = 1 << logn
-    salt = collect(bytes[2:(1 + SALT_LEN)])
-    body = @view bytes[(2 + SALT_LEN):end]
-    s2 = decompress_sig(collect(body), length(body), n)
+    salt = bytes[2:(1 + SALT_LEN)]
+    # A copy, not a view.  Passing the `@view` looks obviously better -- it
+    # saves copying 625 bytes -- and measured *worse*, because every `x[p]` in
+    # decompress_sig then goes through a SubArray's indirection and the tight
+    # bit loop pays for it 512 times over (docs/debug_log.md #039).
+    body = collect(@view bytes[(2 + SALT_LEN):end])
+    s2 = decompress_sig(body, length(body), n)
     s2 === nothing && throw(ArgumentError("malformed compressed signature"))
     return (logn, salt, s2)
 end

@@ -184,3 +184,81 @@
         @test_throws ArgumentError encode_signature(zeros(UInt8, 39), zeros(Int, 512), 9, 666)
     end
 end
+
+@testset "decompress_sig against the bit-at-a-time formulation" begin
+    # Regression test for docs/debug_log.md #039.  decompress_sig now reads
+    # through a 64-bit window and finds the unary run with `leading_zeros`.
+    # The oracle is the original bit-by-bit code, kept here verbatim: this is a
+    # parser fed attacker-controlled bytes, so what matters is that it rejects
+    # *exactly* what the original rejected, not merely that valid inputs still
+    # round-trip.
+    function decompress_ref(x::AbstractVector{UInt8}, slen::Integer, n::Integer)
+        length(x) > slen && return nothing
+        total = 8 * length(x)
+        bit(i) = ((x[(i - 1) >> 3 + 1] >> (7 - ((i - 1) & 7))) & 1) == 1
+        v = Int[]
+        i = 1
+        while length(v) < n
+            i + 7 <= total || return nothing
+            neg = bit(i)
+            low = 0
+            for k in 1:7
+                low = (low << 1) | (bit(i + k) ? 1 : 0)
+            end
+            i += 8
+            high = 0
+            while true
+                i <= total || return nothing
+                bit(i) && break
+                high += 1
+                i += 1
+                high > 2040 && return nothing
+            end
+            i += 1
+            coef = low + (high << 7)
+            (coef == 0 && neg) && return nothing
+            push!(v, neg ? -coef : coef)
+        end
+        while i <= total
+            bit(i) && return nothing
+            i += 1
+        end
+        return v
+    end
+
+    rng = MersenneTwister(20260824)
+
+    # Random bytes: almost all of these are rejections, which is where the
+    # interesting disagreements would be.  The two calls must be given the
+    # *same* arguments -- an earlier draft drew fresh `rand`s inside each side
+    # of the comparison, which compares two different questions and can pass
+    # by luck (the #021 mistake).
+    for _ in 1:40000
+        L = rand(rng, 1:24)
+        b = rand(rng, UInt8, L)
+        sl = rand(rng, L:(L + 2))
+        n = rand(rng, 1:6)
+        @test decompress_sig(b, sl, n) == decompress_ref(b, sl, n)
+    end
+    # real encodings, and each with one bit flipped
+    for n in (2, 8, 128), _ in 1:60
+        val = rand(rng, -400:400, n)
+        e = compress_sig(val, n <= 8 ? 32 : 700)
+        e === nothing && continue
+        @test decompress_sig(e, length(e), n) == val
+        f = copy(e)
+        f[rand(rng, 1:length(f))] ⊻= (0x01 << rand(rng, 0:7))
+        @test decompress_sig(f, length(f), n) == decompress_ref(f, length(f), n)
+    end
+    # long unary runs -- the path where the window empties mid-run
+    for _ in 1:200
+        val = rand(rng, 1000:8000, 4) .* rand(rng, [-1, 1], 4)
+        e = compress_sig(val, 128)
+        e === nothing && continue
+        @test decompress_sig(e, length(e), 4) == decompress_ref(e, length(e), 4)
+    end
+    # degenerate inputs
+    for L in 1:24, b in (zeros(UInt8, L), fill(0xff, L)), n in 1:4
+        @test decompress_sig(b, L, n) == decompress_ref(b, L, n)
+    end
+end

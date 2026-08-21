@@ -362,6 +362,37 @@ function squeeze!(x::SHAKE256XOF, n::Integer)
 end
 
 """
+    squeeze!(xof, out, off, n) -> out
+
+Squeeze `n` bytes into `out[off+1 : off+n]` instead of into a fresh array.
+
+The allocating form is the one to use.  This exists because `hash_to_point` is
+on verification's critical path and needs to top its buffer up by one rate
+block at a time: sizing a single block generously wastes whole Keccak
+permutations, and sizing it exactly means squeezing a second one half the time
+(docs/debug_log.md #038).  Refilling in place lets it ask for exactly what it
+turns out to need (#039).
+"""
+function squeeze!(x::SHAKE256XOF, out::Vector{UInt8}, off::Integer, n::Integer)
+    n >= 0 || throw(ArgumentError("cannot squeeze a negative number of bytes"))
+    off + n <= length(out) || throw(ArgumentError("squeeze! would run past `out`"))
+    x.squeezing || _finalize!(x)
+    k = Int(off) + 1
+    stop = Int(off) + Int(n)
+    while k <= stop
+        if x.pos == SHAKE256_RATE
+            _keccak_f1600!(x.state)
+            x.pos = 0
+        end
+        m = min(SHAKE256_RATE - x.pos, stop - k + 1)
+        _copy_state_bytes!(out, k, x.state, x.pos, m)
+        x.pos += m
+        k += m
+    end
+    return out
+end
+
+"""
 Copy `m` bytes of sponge state, starting at byte offset `pos`, into `out[k...]`.
 
 On a little-endian machine the byte order of the `UInt64` lanes *is* the

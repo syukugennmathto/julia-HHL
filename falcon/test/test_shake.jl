@@ -167,3 +167,27 @@ end
     end
     @test shake256(b"", 0) == UInt8[]
 end
+
+@testset "the in-place squeeze! matches the allocating one" begin
+    # Regression test for docs/debug_log.md #039.  hash_to_point tops its
+    # buffer up a rate block at a time through squeeze!(x, out, off, n); the
+    # two forms must produce the same stream from the same sponge.
+    rng = MersenneTwister(20260825)
+    for total in (1, 8, 135, 136, 137, 272, 1088, 1224, 3000)
+        want = shake256(b"in place", total)
+        x = shake256_xof(b"in place")
+        out = Vector{UInt8}(undef, total)
+        off = 0
+        while off < total
+            k = min(rand(rng, 1:200), total - off)
+            squeeze!(x, out, off, k)
+            off += k
+        end
+        @test out == want
+    end
+    # it must refuse to write past the end rather than corrupting memory
+    let x = shake256_xof(b"bounds"), out = Vector{UInt8}(undef, 10)
+        @test_throws ArgumentError squeeze!(x, out, 5, 6)
+        @test_throws ArgumentError squeeze!(x, out, 0, -1)
+    end
+end

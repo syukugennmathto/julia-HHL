@@ -75,27 +75,34 @@ function hash_to_point(message::AbstractVector{UInt8}, salt::AbstractVector{UInt
     xof = shake256_xof(salt, message)
     out = Vector{Int}(undef, n)
 
-    # The XOF is squeezed in blocks rather than two bytes at a time.  This is
-    # the same byte stream read differently -- a sponge does not care where the
-    # caller puts the boundaries -- but two bytes at a time meant one small
-    # allocation and one call per coefficient, and measured at 0.028 ms against
-    # a 0.0097 ms floor for the SHAKE256 itself (docs/debug_log.md #038).
+    # The XOF is squeezed in blocks rather than two bytes at a time -- the same
+    # byte stream read differently, since a sponge does not care where the
+    # caller puts the boundaries.  Two bytes at a time meant one allocation and
+    # one call per coefficient (docs/debug_log.md #038).
     #
-    # The block is sized with headroom for rejection.  At q = 12289 a draw is
-    # accepted with probability 61445/65536 ~ 0.9375, so the *expected* need is
-    # 2n/0.9375 = 2.133n bytes.  Sizing the block at exactly that -- 17n/8, as
-    # this first did -- means about half of all calls come up short and squeeze
-    # a second full block, which doubled the SHAKE256 work and was invisible in
-    # the per-part timings because the parts summed to half the whole
-    # (docs/debug_log.md #038).  5n/2 leaves real margin; needing a second
-    # block is then rare rather than a coin flip, and the loop still handles it.
+    # The block sizes are chosen in whole Keccak permutations, because that is
+    # the only granularity the sponge actually has.  A draw is accepted with
+    # probability 61445/65536 ~ 0.9375, so the expected need is 2n/0.9375 =
+    # 2.133n bytes -- 1092 at n = 512, or 8.03 rate blocks.  The first fill is
+    # therefore 8 blocks and the top-ups are one block each, which costs on
+    # average about 8.5 permutations per call.  Filling a single generous
+    # buffer instead cost 10, and sizing it at exactly the expected need cost
+    # 16 half the time (#039).
+    rate = SHAKE256_RATE
+    first = max(rate, (2 * Int(n) * 17) >> 4)
+    first = ((first + rate - 1) ÷ rate) * rate            # whole permutations
+    buf = Vector{UInt8}(undef, first)
+    squeeze!(xof, buf, 0, first)
+    have = first
     i = 1
-    blk = max(64, (5 * Int(n)) >> 1)
-    buf = squeeze!(xof, blk)
     pos = 1
     @inbounds while i <= n
-        if pos + 1 > length(buf)
-            buf = squeeze!(xof, blk)
+        if pos + 1 > have
+            # Everything drawn so far is consumed, so the buffer is reused from
+            # the start.  `first` is even and pairs are consumed two at a time,
+            # so this can never split a pair across the refill.
+            squeeze!(xof, buf, 0, rate)
+            have = rate
             pos = 1
         end
         elt = (Int(buf[pos]) << 8) + Int(buf[pos + 1])   # big-endian, per the reference
@@ -103,11 +110,9 @@ function hash_to_point(message::AbstractVector{UInt8}, salt::AbstractVector{UInt
         if elt < bound
             # `elt % q` would be an integer division -- `q` arrives as a keyword
             # argument, so it is not a compile-time constant and LLVM cannot
-            # turn it into a multiply-shift.  That division was ~40% of
-            # hash_to_point (docs/debug_log.md #038).  But `elt < bound = k*q`
-            # with k = 5, so the remainder is at most four conditional
-            # subtractions away, and this says the same thing the rejection
-            # bound above already says.
+            # turn it into a multiply-shift.  But `elt < bound = k*q` with
+            # k = 5, so the remainder is at most four conditional subtractions
+            # away, and this says the same thing the rejection bound says.
             r = elt
             while r >= q
                 r -= q
@@ -342,6 +347,11 @@ interoperability test.
 """
 function falcon_verify(pk::FalconPublicKey, message, signature::AbstractVector{UInt8})
     p = pk.params
+    # `collect` rather than passing `message` through: it costs one small copy
+    # and buys a concretely typed local.  Returning `codeunits(...)` for a
+    # string and the argument itself otherwise leaves `msg` a union, and the
+    # dynamic dispatch that follows costs more than the copy
+    # (docs/debug_log.md #039).
     msg = message isa AbstractString ? collect(codeunits(message)) : collect(message)
 
     logn, salt, s2 = try
