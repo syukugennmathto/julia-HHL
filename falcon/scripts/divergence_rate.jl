@@ -201,7 +201,12 @@ end
 function main()
     nkeys = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 100
     nsig  = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 1000
+    # optional third argument: a comma-separated subset of the arms, so one arm
+    # can be pushed to a larger sample without paying for the others
+    want = length(ARGS) >= 3 ? Set(split(ARGS[3], ',')) : nothing
+    on(name) = want === nothing || name in want
     println("# divergence_rate.jl  n=512  ", nkeys, " keys x ", nsig, " signatures per arm")
+    want === nothing || println("# arms: ", join(sort(collect(want)), ", "))
     println()
 
     # Before measuring anything: confirm each tree-side arm actually perturbs
@@ -221,20 +226,21 @@ function main()
         println()
     end
 
-    report("A2 -- complex division and D11, the tree only  (THE OPEN QUESTION)",
+    on("A2") && report("A2 -- complex division and D11, the tree only  (THE OPEN QUESTION)",
            rate(nkeys, nsig, "A2"; build = sk -> respelled_tree(sk, cdiv = true, ldl = true)),
            "not in ePrint 2024/1709; present in both of C's signing modes")
 
-    report("A1 -- the hand-unrolled bottom levels  (positive control)",
+    on("A1") && report("A1 -- the hand-unrolled bottom levels  (positive control)",
            rate(nkeys, nsig, "A1"; sign2 = with_spec_ffsampling),
            "= ePrint 2024/1709 section 6.1, sign_dyn vs sign_tree; Table 2 reports ~3e-5")
 
     # split A2, so a divergence can be attributed
-    report("A2a -- complex division alone",
+    on("A2a") && report("A2a -- complex division alone",
            rate(nkeys, nsig, "A2a"; build = sk -> respelled_tree(sk, cdiv = true, ldl = false)))
-    report("A2b -- the D11 spelling alone",
+    on("A2b") && report("A2b -- the D11 spelling alone",
            rate(nkeys, nsig, "A2b"; build = sk -> respelled_tree(sk, cdiv = false, ldl = true)))
 
+    on("B") || return
     # B, with the leaf count that shows the perturbation really is applied
     pt = point()
     r = chacha20(collect(UInt8, 0x00:0x37))
@@ -242,7 +248,7 @@ function main()
     nleaf = count(zip(leafisig(sk.tree), leafisig(recip_tree(sk).tree))) do (x, y)
         reinterpret(UInt64, x) != reinterpret(UInt64, y)
     end
-    report("B -- fpr_inv_sigma vs 1/sigma  (negative control)",
+    on("B") && report("B -- fpr_inv_sigma vs 1/sigma  (negative control)",
            rate(nkeys, nsig, "B"; build = recip_tree),
            "$nleaf of 512 tree leaves differ; Lemma 2 of 2024/1709 predicts ~1e-11, " *
            "so zero here is expected and carries no information")
