@@ -6,12 +6,14 @@ A specification-conformant Julia implementation of FALCON.
 The document this code is conformant *to* is **Falcon Specification v1.2
 (01/10/2020)**, the round-3 submission -- see `docs/refs.md` and
 `test/test_spec.jl`, which transcribe its tables.  FN-DSA is the name NIST
-gave Falcon for **FIPS 206**, and that draft has **not** been read here (the
-authoring environment cannot reach nvlpubs.nist.gov, docs/debug_log.md #002),
-so whatever FIPS 206 changed relative to the submission -- domain separation,
-the `ctx` string, any renaming -- is **not** reflected.  Read "FN-DSA" in this
-repository as "Falcon, the algorithm that became FN-DSA", not as a claim of
-FIPS 206 conformance.
+gave Falcon for **FIPS 206**, and as of 2026-08-21 **FIPS 206 does not exist**:
+no initial public draft has been published, and NIST's own status update says
+it is still in clearance.  So nothing here is FIPS 206 conformant, and nothing
+anywhere is.  What NIST has announced it will change -- domain separation via
+an ML-DSA-style `mu`, a `ctx` string, randomized-only signing, an infinity-norm
+bound of 840, NTT-format public keys, little-endian encodings -- is listed in
+docs/refs.md and is **not** reflected here.  Read "FN-DSA" in this repository
+as "Falcon, the algorithm that became FN-DSA", not as a conformance claim.
 
 Scope and non-goals
 -------------------

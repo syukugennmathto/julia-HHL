@@ -40,8 +40,10 @@
 FALCON を Julia で仕様準拠実装する長期プロジェクト。
 準拠先は **Falcon 仕様書 v1.2（01/10/2020）**、すなわち round-3 提出版である。
 FN-DSA は NIST が FIPS 206 で Falcon に与えた名前だが、
-**そのドラフトは読めていない**ので、FIPS 206 が加えた変更
-（ドメイン分離、`ctx` など）は反映していない（`docs/refs.md`）。
+**2026-08-21 時点で FIPS 206 はまだ発行されていない**（IPD すら出ていない）。
+NIST が予告している変更（μ によるドメイン分離、`ctx`、randomized のみ、
+無限ノルム 840、公開鍵の NTT 化、リトルエンディアン統一など）は
+反映していない。一覧は `docs/refs.md`。
 目標は **FALCON-512 の keygen / sign / verify が KAT を通ること**。
 
 定数時間性・サイドチャネル耐性は**スコープ外**。ただし「本来ここが定数時間実装の
@@ -227,6 +229,8 @@ Table 3.2 の SamplerZ ベクタ 16 本）。
 - **#022 の「KAT の反転規約はハーネスにしか書かれていない」は外れ**だった。
   仕様書 Table 3.2 のベクタも同じ規約で、`reversed_chunks=true` で 16/16 通る。
 
-まだ無いのは **FIPS 206 ドラフト**と提出パッケージの
-`Supporting_Documentation/additional/`（σ_min の導出が入っている `parameters.py`）。
-詳細は `docs/refs.md`。
+まだ無いのは提出パッケージの `Supporting_Documentation/additional/`
+（σ_min の導出が入っている `parameters.py`）。
+**FIPS 206 は「無い」のではなく「まだ存在しない」** ―
+2026-08-21 時点で IPD も出ていない。詳細と、公表されている範囲での
+round-3 → FN-DSA の差分一覧は `docs/refs.md`。

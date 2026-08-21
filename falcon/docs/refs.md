@@ -64,7 +64,7 @@ MIT ではないので、全文を vendor しない。
 
 | 資料 | 状態 |
 |:---|:---|
-| **FIPS 206 ドラフト**（FN-DSA） | 未入手。実行環境の egress ポリシーが nvlpubs.nist.gov を遮断している（`docs/debug_log.md` #002）。このリポジトリが「FN-DSA」を名乗る根拠は Falcon 仕様書 v1.2 の方であり、FIPS 206 が Falcon に加えた変更（ドメイン分離、`ctx` など）は**反映していない** |
+| **FIPS 206**（FN-DSA） | **そもそも発行されていない。** 2026-08-21 時点で csrc.nist.gov の FIPS 一覧に FIPS 206 は無く、initial public draft も出ていない。「入手できない」ではなく「**存在しない**」。下記 |
 
 ### 番号を間違えやすいので注記
 
@@ -84,3 +84,54 @@ NIST の PQC 標準は 4 本あり、**この実装に関係するのは 206 だ
 **#002 の「仕様書 PDF に到達できない」は 2026-08-21 に解消した**（#046）。
 `FalconParams.spec_ref` は Table 3.3 を指しており、
 `test/test_spec.jl` が表そのものを転記して検査している。
+
+## FIPS 206 の状態（2026-08-21 現在）
+
+**未発行。** 「読めていない」のではなく「**まだ書かれた文書が公開されていない**」。
+
+- csrc.nist.gov の FIPS 一覧に FIPS 206 は**掲載されていない**
+  （掲載は FIPS 203 / 204 / 205、いずれも 2024-08-13 Final まで）。
+  ドラフト一覧にも無い。
+- NIST は 2025-08-28 にドラフトを承認手続きに提出。
+  2025-09 の第 6 回 PQC 標準化会議で Ray Perlner が
+  "We expect to release an Initial Public Draft soon / It's basically written,
+  awaiting approval" と発表。以後 NIST・商務省内のクリアランスで停滞。
+- pqc-forum の NIST 公式回答:
+  "The draft is still in clearance within NIST and the Dept. of Commerce"。
+- IETF `draft-ietf-cose-falcon-04` は FN-DSA を
+  "defined in US NIST FIPS 206 (expected to be published in late 2026 early 2027)"
+  と記載。
+- **ACVP の FN-DSA テストベクタも存在しない**
+  （usnistgov/ACVP-Server に FN-DSA / FIPS206 のフォルダが無い）。
+
+したがって **`spec_ref` に FIPS 206 を書ける日はまだ来ていない**し、
+「FIPS 206 準拠」を主張できる実装は世界に一つも無い。
+
+### 公表されている範囲での「Falcon round-3 → FN-DSA」の差分
+
+出典は NIST 公式プレゼン（Perlner 2025-09）と pqc-forum の NIST 公式回答、
+および Thomas Pornin の追随実装（`pornin/c-fn-dsa`、Unlicense）の README。
+**本文が無いので、以下はすべて確定ではない。**
+
+| 変更 | 内容 |
+|:---|:---|
+| ドメイン分離 | ML-DSA 型。中間値 μ を導入し、公開鍵ハッシュ `tr = SHAKE256(pk, 64)` を混ぜる |
+| `ctx` | context string（≤ 255 バイト、既定は空）を追加 |
+| pure / prehash | `HashFN-DSA` を定義。OID は NIST 登録待ち（TBD） |
+| internal / external | ML-DSA と同様に分離 |
+| 署名の乱択性 | **randomized のみ。決定的署名を明示的に禁止**（浮動小数点実装の差で同一ハッシュから異なる署名が出る危険） |
+| salt | repeat ループの**外**でサンプル（round-3 は内側）。eprint 2024/1769 |
+| 追加の判定 | 署名の**無限ノルム上限 840**（round-3 は符号化都合の 2047） |
+| base sampler | 72 bit → **79 bit**（符号ビットの余り 7 bit を捨てずに使う） |
+| 公開鍵 | **NTT 形式**で格納（round-3 は plain） |
+| エンコード | **リトルエンディアンに統一** |
+| keygen | GS ノルム上限を `0.9999·1.17√q` に、木の葉が `[σmin, σmax]` に入るか明示チェック |
+| 浮動小数点 | IEEE 754-2019 の必要部分を FIPS 206 本文に**再掲**（IEEE の許諾済み）。演算順序を規定し **FMA を禁止**。署名は KAT に厳密一致することを要求 |
+| 数値パラメータ | `q = 12289`、`n = 512/1024`、`σ`、`σmin`、`σmax` は**変更なし** |
+
+**この実装は上のどれも反映していない。** round-3 の Falcon である。
+とくに 4 番目（決定的署名の禁止）と 12 番目（FMA 禁止・KAT 厳密一致）は
+`docs/debug_log.md` #048 の話と正面から関係する ―
+FIPS 206 は「署名は KAT に bit 一致すること」を要求する方向なので、
+**#048 で潰した 3 箇所（複素除算・LDL の D11・ffSampling の最下段）は、
+いずれ規範として書かれる可能性が高い。**
