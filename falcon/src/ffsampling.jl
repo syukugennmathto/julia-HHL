@@ -533,30 +533,35 @@ operation from the C reference's hand-unrolled block.
 
 [C-ref] scripts/cref/sign.c, `ffSampling_fft`, the `logn == 2` case.
 
-## NOT WIRED IN.  Read this before changing that.
+## WIRED IN, AND VERIFIED WITH THE REAL SAMPLER.
 
-`ffsampling_fft` does **not** call this.  It is reachable, tested against the C
-reference, and deliberately left disconnected, because what has been verified
-is not what would be needed to connect it.
+`ffsampling_fft` calls this at `n == 4` whenever `FFSAMPLING_CREF[]` is true,
+which is the default on this branch (see the dispatch below).  It is what
+makes signing reproduce the C reference's bytes.
 
-What is verified: with a *deterministic* stand-in for the sampler (plain
-`floor`, which consumes no randomness), substituting this block makes the whole
-recursion agree with C bit for bit at every degree from 4 to 512, where the
-generic recursion disagrees from degree 4 upward.  So the **arithmetic** is
-right.
+An earlier revision of this comment said the block was left disconnected
+because only its *arithmetic* had been checked (against a deterministic
+`floor` stand-in for the sampler) and not the *order and count of its
+`samplerz` calls*.  That gap has since been closed.  `scripts/cref_shim.c`
+drives the C reference's real sampler off a directly seeded 56-byte ChaCha20
+state, `scripts/gen_cref_sign_kat.jl` records its output, and
+`test/test_falcon.jl` ("signing reproduces the C reference byte for byte")
+replays those vectors: with this block wired in, our `sample_preimage` returns
+C's `s2` exactly, and `compress_sig` returns C's bytes exactly, on all eight
+vectors.  Reproducing the bytes is only possible if the four `samplerz` calls
+below consume randomness in C's order, so that order is now measured, not just
+transcribed.
 
-What is not verified: the **order and count of the `samplerz` calls**.  Each
-call consumes bytes, so a transcription that computes the same numbers while
-asking for randomness in a different order still produces a different
-signature -- and the `floor` measurement is blind to exactly that.  Wiring
-this in made `FFSAMPLING_KAT` (recorded from the Python reference) fail, which
-is expected on this branch and therefore says nothing either way about whether
-the four calls below are in C's order.
+The one caveat that remains is the one every spelling on this branch shares:
+these algebraically-equal rewrites move the sampler's centre, so on rare
+inputs (~1e-5 per signature) reverting them changes the signature -- see
+`with_spec_ffsampling`, `scripts/divergence_rate.jl` and docs/debug_log.md
+#056.  That is a statement about the specification, not a defect in this
+block.
 
-Settling it needs C driven with the real sampler off a controlled PRNG, which
-is the next step and has not been done.  Until then this stays disconnected:
-shipping it would be trading a divergence that is understood for one that is
-not (docs/debug_log.md #048).
+The `FFSAMPLING_KAT` vectors recorded from the *Python* reference are replayed
+through the generic recursion (`with_spec_ffsampling`), not through this block,
+because the Python reference does not hand-unroll `logn == 2`.
 
 ## Why it exists at all
 
@@ -588,10 +593,9 @@ all inside `samplerz`.
 
 NOTE ON THE ORDER OF SAMPLER CALLS: the four `samplerz` calls below are in C's
 order, and that order matters because each call consumes bytes from
-`randombytes`.  The bit-exactness measurement that motivated this block used a
-deterministic stand-in for the sampler, so it verified the *arithmetic* and
-not the *consumption order*; the order here is transcribed from the C source,
-not measured.
+`randombytes`.  That the order is C's is confirmed, not merely transcribed: the
+byte-exact KAT above drives the real sampler off a controlled PRNG, and it
+would fail on the first call taken out of order.
 """
 function _ffsampling_c4(t0::Vector{ComplexF64}, t1::Vector{ComplexF64},
                         node::FFLDLNode, sigmin::Real, randombytes)

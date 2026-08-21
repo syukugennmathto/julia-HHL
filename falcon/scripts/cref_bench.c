@@ -58,6 +58,22 @@ cmp_double(const void *a, const void *b)
 	return (x > y) - (x < y);
 }
 
+static double
+percentile(const double *t, int n, double p)
+{
+	double k, frac;
+	int lo, hi;
+
+	if (n <= 0) {
+		return 0.0;
+	}
+	k = (double)(n - 1) * p;
+	lo = (int)k;
+	hi = lo + 1 < n ? lo + 1 : n - 1;
+	frac = k - (double)lo;
+	return t[lo] + (t[hi] - t[lo]) * frac;
+}
+
 static void
 report(const char *op, unsigned logn, double *t, int n)
 {
@@ -69,8 +85,11 @@ report(const char *op, unsigned logn, double *t, int n)
 		sum += t[i];
 	}
 	median = (n & 1) ? t[n / 2] : 0.5 * (t[n / 2 - 1] + t[n / 2]);
-	printf("%s %u %.6f %.6f %.6f %d\n",
-		op, 1u << logn, median, sum / (double)n, t[0], n);
+	/* op n median mean min p25 p75 iters -- matches bench.jl and
+	   pyref_bench.py so all three back ends print the same columns. */
+	printf("%s %u %.6f %.6f %.6f %.6f %.6f %d\n",
+		op, 1u << logn, median, sum / (double)n, t[0],
+		percentile(t, n, 0.25), percentile(t, n, 0.75), n);
 	fflush(stdout);
 }
 

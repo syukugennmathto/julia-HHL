@@ -303,25 +303,28 @@
         end
     end
 
-    @testset "the two spellings differ in bits and agree in signatures" begin
-        # The finding that #050 nearly got wrong.
+    @testset "the two spellings differ in bits, and agree on these 8 vectors" begin
+        # The finding whose interpretation this project got wrong three times
+        # and then corrected (docs/debug_log.md #048, #050, #053, #054, #056).
         #
         # #048 identified three places where the specification's formulas and
         # the C reference's spelling are algebraically identical and round
-        # differently.  The natural conclusion -- that respelling them is what
-        # makes signing reproduce C -- is FALSE, and measuring it is the only
-        # way to know.  With all three reverted, signing still reproduces C on
-        # every vector.  Over 480 signatures at n = 512 the two routes did not
-        # differ in a single coefficient out of 245760.
+        # differently.  The tempting conclusion -- that these differences never
+        # reach the signature -- was asserted here on the strength of 480
+        # signatures showing zero divergence.  That was under-powered: the
+        # divergence rate is on the order of 1e-5 per signature (A1, the
+        # hand-unrolled bottom levels, at 5e-5; A2, complex division and D11,
+        # at 7.5e-6 -- scripts/divergence_rate.jl), and 480 signatures cannot
+        # distinguish 1e-5 from 0.  The mechanism is NOT a sub-ulp BerExp
+        # margin as once claimed here; it is `s = floor(mu)` straddling an
+        # integer centre (ePrint 2024/1709, Lemma 1), which is a difference of
+        # exactly 1, not a rare coin flip.
         #
-        # The difference is real, it is just below the sampler's decision
-        # margin: `berexp` compares a fixed-point exponential against random
-        # bytes, and an ulp of slack in its argument flips that comparison with
-        # probability on the order of 2^-52.
-        #
-        # So the test asserts both halves, because either alone is misleading:
-        # the intermediate values DO differ bit-for-bit, and the signatures do
-        # NOT.
+        # What is true, and all this test now asserts, is narrower: the
+        # arithmetic genuinely differs bit-for-bit, and on these 8 specific KAT
+        # vectors the two spellings happen to agree (none is one of the rare
+        # divergent cases).  The divergence itself is measured, at scale, in
+        # scripts/divergence_rate.jl, not here.
         p = FALCON_512
 
         # (a) the arithmetic really is different -- otherwise (b) is vacuous
@@ -329,7 +332,8 @@
             @test Falcon._cdiv_cref(a, b) != a / b
         end
 
-        # (b) and it does not reach the signature
+        # (b) on these 8 vectors specifically, both spellings give C's output.
+        #     This is NOT a claim that they always agree -- see #056.
         for (f, g, F, G, salt, state, pt, want_s2, _) in CREF_SIGN_KAT
             sk = expand_privkey(f, g, F, G, p)
             r1 = chacha20(state); r2 = chacha20(state)

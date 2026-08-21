@@ -57,9 +57,16 @@ function make_rng(seed::AbstractString)
     end
 end
 
+pct(t::Vector{Float64}, p::Real) = (s = sort(t); isempty(s) ? 0.0 : begin
+    k = (length(s) - 1) * p; lo = floor(Int, k) + 1; hi = min(lo + 1, length(s))
+    s[lo] + (s[hi] - s[lo]) * (k - (lo - 1))
+end)
+
 function report(op::AbstractString, n::Integer, t::Vector{Float64})
-    @printf("%s %d %.6f %.6f %.6f %d\n",
-            op, n, median(t), mean(t), minimum(t), length(t))
+    # median mean min p25 p75 iters -- the p25/p75 columns are new, and the
+    # C driver's six-column lines are read as p25 = p75 = min by bench_compare.
+    @printf("%s %d %.6f %.6f %.6f %.6f %.6f %d\n",
+            op, n, median(t), mean(t), minimum(t), pct(t, 0.25), pct(t, 0.75), length(t))
     flush(stdout)
 end
 
