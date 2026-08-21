@@ -308,7 +308,12 @@ function falcon_sign(sk::FalconPrivateKey, message, randombytes;
 
     for _ in 1:max_attempts
         s1, s2 = sample_preimage(sk, point, randombytes)
-        nrm = sqnorm(s1, s2)
+        # `sqnorm_machine` rather than `sqnorm`: same value, but no branch on
+        # the coefficients and no `BigInt` (poly.jl, docs/constant_time.md).
+        # The candidate being tested here may be *rejected* and never
+        # published, so its coefficients are secret in a way the accepted
+        # signature's are not.
+        nrm = sqnorm_machine(s1, s2)
         nrm <= p.sig_bound || continue                 # too long: resample
         sig = encode_signature(salt, s2, p.logn, p.sig_bytes)
         sig === nothing && continue                    # does not fit: resample

@@ -323,31 +323,60 @@ Returning `nothing` is not an error -- it is the signal that signing must
 sample again (keeping the same salt).  See the module header.
 """
 function compress_sig(v::AbstractVector{<:Integer}, slen::Integer)
-    bits = BitVector()
+    nbits = 8 * Int(slen)
+    out = zeros(UInt8, Int(slen))
+    pos = 0                                          # next bit index, 0-based
+
+    # Write bit `b` (0 or 1) at index `i`, with NO branch on `b`.
+    #
+    # The obvious spelling is `b == 1 && setbit!(i)`, and that is what this
+    # function used to do -- eight conditional writes per coefficient, 4096
+    # per signature.  Measured, it was by a wide margin the largest timing
+    # signal in the whole implementation, and not for the reason it looked
+    # like: the cost is BRANCH MISPREDICTION on the bit pattern, not the
+    # unary run below.  Compressing the same signature repeatedly lets the
+    # predictor learn all 4096 outcomes, so it runs at 5.6 microseconds;
+    # compressing signatures that differ costs 15.3.  A three-fold difference,
+    # keyed on the data (docs/debug_log.md #051).
+    @inline function putbit!(i, b)
+        @inbounds out[(i >> 3) + 1] |= UInt8((b & 1) << (7 - (i & 7)))
+    end
+
     for coef in v
-        a = abs(Int(coef))
-        push!(bits, coef < 0)                       # sign
-        for k in 6:-1:0                             # seven low bits, MSB first
-            push!(bits, ((a >> k) & 1) == 1)
+        c = Int(coef)
+        a = abs(c)
+        # `>>> 63` rather than `c < 0`: the sign as a value, not as a branch.
+        pos + 9 + (a >> 7) > nbits && return nothing   # cannot fit
+        putbit!(pos, (c >>> 63) & 1)
+        pos += 1
+        for k in 6:-1:0
+            putbit!(pos, (a >> k) & 1)
+            pos += 1
         end
-        for _ in 1:(a >> 7)                         # high bits, unary
-            push!(bits, false)
-        end
-        push!(bits, true)
+        # THE UNARY RUN IS NOT WRITTEN.  `out` is zero-initialised, so the
+        # `a >> 7` zero bits are already there; only the position advances.
+        # The reference pushes them one at a time.
+        pos += a >> 7
+        putbit!(pos, 1)
+        pos += 1
     end
-    length(bits) > 8 * slen && return nothing       # does not fit: retry signing
-    while length(bits) < 8 * slen
-        push!(bits, false)
-    end
-    out = zeros(UInt8, slen)
-    for i in 1:length(bits)
-        if bits[i]
-            byte = (i - 1) >> 3 + 1
-            out[byte] |= UInt8(0x80 >> ((i - 1) & 7))
-        end
-    end
+    # The tail is already zero, which is what the format requires.
     return out
 end
+
+# CONSTANT TIME: `compress_sig` is now free of branches on the coefficients,
+# but it is NOT constant time, and the remaining channels are worth naming
+# rather than leaving to be discovered:
+#
+#   * `pos` advances by `a >> 7`, so which byte of `out` each write touches
+#     depends on the data.  That is a memory-access-pattern channel, and no
+#     rewrite that still produces a variable-length code can remove it.
+#   * the `pos + 9 + (a >> 7) > nbits` early return is a branch on the data.
+#     It fires only when a candidate does not fit, which makes signing
+#     resample; the candidate is then never published, so unlike the accepted
+#     signature its coefficients really are secret.
+#
+# See docs/constant_time.md for what that does and does not imply.
 
 """
     decompress_sig(x, slen, n) -> Union{Vector{Int},Nothing}

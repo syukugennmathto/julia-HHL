@@ -55,7 +55,7 @@ export SHAKE256XOF, shake256_xof, absorb!, squeeze!, shake256
 export ChaCha20, chacha20, randombytes!
 
 # --- module 3 --------------------------------------------------------------
-export polyadd, polysub, polyneg, polymul, polyadj, sqnorm
+export polyadd, polysub, polyneg, polymul, polyadj, sqnorm, sqnorm_machine
 export polyaddq, polysubq, polymulq, centered
 export polysplit, polymerge
 

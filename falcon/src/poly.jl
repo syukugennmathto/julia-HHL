@@ -245,6 +245,47 @@ function sqnorm(vs::AbstractVector...)
     return slow
 end
 
+"""
+    sqnorm_machine(v1, v2) -> Int128
+
+`||v1||^2 + ||v2||^2` for two vectors of machine integers, with **no branch on
+the data and no allocation**.
+
+Used by signing's acceptance test.  `sqnorm` above dispatches between an
+`Int128` accumulator and a `BigInt` one by *scanning the coefficients*, which
+is correct in general -- the descent in ntrugen.jl really does reach thousands
+of bits -- and is a per-coefficient branch on secret data when the caller is
+`falcon_sign`.  It also returns a `BigInt`, so the accept/reject comparison
+allocates.
+
+Neither is needed there.  A signature candidate is a vector of `Int`s obtained
+by rounding, and its coefficients cannot approach `2^40`: `s2` is bounded by
+the encoder's format and `s1` by `c - s2*h` over centred residues.  So the
+accumulator is provably safe *from the types and lengths alone*, which are
+public, and the loop can run unconditionally.
+
+CONSTANT TIME: this is one of the few places in this implementation where the
+constant-time version was also the fast version, so there was no trade to make.
+`@simd` is applied because the loop is now free of the early exit that
+prevented vectorisation.  What this does NOT fix is that the *number of
+rejections* in `falcon_sign` still depends on the key and the message; see
+docs/constant_time.md.
+
+Measured effect: docs/debug_log.md #051.
+"""
+function sqnorm_machine(v1::AbstractVector{<:Integer}, v2::AbstractVector{<:Integer})
+    acc = Int128(0)
+    @inbounds @simd for i in eachindex(v1)
+        x = Int128(v1[i])
+        acc += x * x
+    end
+    @inbounds @simd for i in eachindex(v2)
+        x = Int128(v2[i])
+        acc += x * x
+    end
+    return acc
+end
+
 "Largest coefficient magnitude the `Int128` accumulator is proved safe for."
 const _SQNORM_LIM = Int128(1) << 40
 
