@@ -810,24 +810,40 @@ are the secret key.
 [C-ref] keygen.c:4095-4131 (`mkgauss`)
 """
 function mkgauss(randombytes, logn::Integer)
+    return mkgauss_u64(_u64_reader(randombytes), logn)
+end
+
+"Adapt a `randombytes`-style callable into a zero-argument 64-bit reader."
+_u64_reader(randombytes) = function ()
+    b = randombytes(8)
+    r = UInt64(0)
+    @inbounds for i in 1:8
+        r |= UInt64(b[i]) << (8 * (i - 1))
+    end
+    return r
+end
+
+"""
+    mkgauss_u64(next64, logn) -> Int
+
+[`mkgauss`](@ref) over a source that hands out 64-bit words directly.
+
+This is the form the sampler actually wants.  Going through
+`randombytes(8) -> Vector{UInt8}` allocates twice per draw, and at 1024 draws
+per polynomial and roughly fourteen candidate polynomials per accepted key that
+came to 58284 allocations per key (docs/debug_log.md #043).
+"""
+function mkgauss_u64(next64, logn::Integer)
     g = 1 << (10 - Int(logn))
     val = 0
     for _ in 1:g
-        b = randombytes(8)
-        r = UInt64(0)
-        @inbounds for i in 1:8
-            r |= UInt64(b[i]) << (8 * (i - 1))
-        end
+        r = next64()
         neg = Int(r >> 63)
         r &= ~(UInt64(1) << 63)
-        # `f` becomes 1 when the value is zero, i.e. when r < table[0].
+        # `fl` becomes true when the value is zero, i.e. when r < table[0].
         fl = r < @inbounds(GAUSS_1024_12289[1])
 
-        b = randombytes(8)
-        r = UInt64(0)
-        @inbounds for i in 1:8
-            r |= UInt64(b[i]) << (8 * (i - 1))
-        end
+        r = next64()
         r &= ~(UInt64(1) << 63)
         v = 0
         @inbounds for k in 2:length(GAUSS_1024_12289)
@@ -839,6 +855,81 @@ function mkgauss(randombytes, logn::Integer)
     end
     return val
 end
+
+"""
+Wrap a `randombytes` callable in a buffer and hand out 64-bit words.
+
+The buffer is refilled `_U64_BLOCK` bytes at a time.  Note that this changes
+*when* the underlying source is asked for bytes, though not the values it
+produces in sequence -- a replay source with an exact budget will be asked for
+more than it holds, which is why this is used only on the CDT path, where no
+recorded byte count exists to match.
+
+512 is not a tunable: it is the largest single request the reference ChaCha20
+PRNG will serve, because that is its internal buffer (`randombytes!` in
+shake.jl throws above it).  Asking for 4096 -- which is what the first version
+of this did -- fails outright.  See docs/debug_log.md #043.
+"""
+const _U64_BLOCK = 512
+
+"""
+    BufferedU64(randombytes)
+
+A callable that hands out 64-bit words, refilling from `randombytes` in
+[`_U64_BLOCK`](@ref)-byte blocks.
+
+This is a `mutable struct` with a type parameter on the source, and not the
+closure it started life as, for a reason worth writing down.  The closure
+version reassigned its captured buffer (`buf = randombytes(...)`) from inside
+the returned function; Julia answers that by boxing the capture in a
+`Core.Box`, whose element type is `Any`.  Every subsequent `buf[i]` is then a
+dynamic dispatch returning a boxed value.  Measured, that cost a factor of
+about seven on the whole sampler (docs/debug_log.md #043).
+
+A callable struct captures the same state with the same lifetime and stays
+concretely typed, so `next()` inlines to a bounds check and a load.
+"""
+mutable struct BufferedU64{F}
+    src::F
+    buf::Vector{UInt8}
+    pos::Int      # bytes of `buf` already consumed
+end
+
+BufferedU64(src) = BufferedU64(src, UInt8[], 0)
+
+"""
+Load a little-endian `UInt64` from `buf[i:i+7]`.
+
+On a little-endian machine that is exactly the memory image, so it is one
+unaligned 8-byte load; elsewhere it has to be assembled a byte at a time.  The
+byte order is the C reference's, not the machine's, so the branch is on
+`ENDIAN_BOM` and not left to `reinterpret`.
+"""
+@inline function _load_u64_le(buf::Vector{UInt8}, i::Int)
+    @boundscheck checkbounds(buf, i:(i + 7))
+    if ENDIAN_BOM == 0x04030201            # little-endian host
+        return GC.@preserve buf unsafe_load(Ptr{UInt64}(pointer(buf, i)))
+    else
+        r = UInt64(0)
+        @inbounds for k in 0:7
+            r |= UInt64(buf[i + k]) << (8 * k)
+        end
+        return r
+    end
+end
+
+@inline function (b::BufferedU64)()
+    p = b.pos
+    if p + 8 > length(b.buf)
+        b.buf = b.src(_U64_BLOCK)
+        p = 0
+    end
+    b.pos = p + 8
+    return @inbounds _load_u64_le(b.buf, p + 1)
+end
+
+"Deprecated spelling kept so existing call sites read the same."
+_buffered_u64_reader(randombytes) = BufferedU64(randombytes)
 
 """
     gen_poly_cdt(n, randombytes) -> Vector{BigInt}
@@ -862,11 +953,17 @@ function gen_poly_cdt(n::Integer, randombytes)
     logn = trailing_zeros(ni)
     (1 << logn) == ni || throw(ArgumentError("n must be a power of two, got $ni"))
     logn <= 10 || throw(ArgumentError("gen_poly_cdt is defined for n <= 1024"))
-    f = Vector{BigInt}(undef, ni)
+    # Sampled into `Int` and converted at the end.  Writing straight into a
+    # `Vector{BigInt}` would allocate a GMP object per coefficient inside the
+    # rejection loop, which is the hot loop.
+    fi = Vector{Int}(undef, ni)
     mod2 = 0
+    # One buffered reader for the whole polynomial: the source is asked for
+    # half a kilobyte at a time instead of eight bytes two thousand times over.
+    next64 = BufferedU64(randombytes)
     for u in 1:ni
         while true
-            s = mkgauss(randombytes, logn)
+            s = mkgauss_u64(next64, logn)
             (-127 <= s <= 127) || continue
             if u == ni
                 # the last coefficient must make the total odd
@@ -874,11 +971,11 @@ function gen_poly_cdt(n::Integer, randombytes)
             else
                 mod2 ⊻= (s & 1)
             end
-            f[u] = s
+            fi[u] = s
             break
         end
     end
-    return f
+    return BigInt[BigInt(c) for c in fi]
 end
 
 """

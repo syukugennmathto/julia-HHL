@@ -161,6 +161,30 @@ using Statistics, Random
             end
         end
 
+        # 3b. The buffered reader the sampler draws through hands out the same
+        #     64-bit words a naive eight-bytes-at-a-time reader would.  It has
+        #     to: 512 is the ChaCha20 buffer size and is divisible by 8, so
+        #     neither request pattern triggers the reference's end-of-buffer
+        #     discard, and the streams coincide byte for byte.
+        #
+        #     This is the regression test for #043 -- not for the boxing (that
+        #     was a speed bug, and speed is not a test) but for the rewrite
+        #     that fixed it, which touched how bytes are read.
+        let a = chacha20(collect(UInt8, 0x01:0x38)),
+            b = chacha20(collect(UInt8, 0x01:0x38))
+            buffered = Falcon.BufferedU64(k -> randombytes!(a, k))
+            naive = () -> begin
+                v = randombytes!(b, 8)
+                r = UInt64(0)
+                for i in 1:8
+                    r |= UInt64(v[i]) << (8 * (i - 1))
+                end
+                r
+            end
+            # 1000 words spans several refills of the 64-word block
+            @test all(buffered() == naive() for _ in 1:1000)
+        end
+
         # 4. `sampler = :spec` still selects the specification's route, which is
         #    what keeps the recorded vectors above meaningful.
         @test_throws ArgumentError ntru_gen(8, ReplayBytes(zeros(UInt8, 8)); sampler = :nope)
