@@ -74,12 +74,45 @@ function hash_to_point(message::AbstractVector{UInt8}, salt::AbstractVector{UInt
     bound = k * q
     xof = shake256_xof(salt, message)
     out = Vector{Int}(undef, n)
+
+    # The XOF is squeezed in blocks rather than two bytes at a time.  This is
+    # the same byte stream read differently -- a sponge does not care where the
+    # caller puts the boundaries -- but two bytes at a time meant one small
+    # allocation and one call per coefficient, and measured at 0.028 ms against
+    # a 0.0097 ms floor for the SHAKE256 itself (docs/debug_log.md #038).
+    #
+    # The block is sized with headroom for rejection.  At q = 12289 a draw is
+    # accepted with probability 61445/65536 ~ 0.9375, so the *expected* need is
+    # 2n/0.9375 = 2.133n bytes.  Sizing the block at exactly that -- 17n/8, as
+    # this first did -- means about half of all calls come up short and squeeze
+    # a second full block, which doubled the SHAKE256 work and was invisible in
+    # the per-part timings because the parts summed to half the whole
+    # (docs/debug_log.md #038).  5n/2 leaves real margin; needing a second
+    # block is then rare rather than a coin flip, and the loop still handles it.
     i = 1
-    while i <= n
-        b = squeeze!(xof, 2)
-        elt = (Int(b[1]) << 8) + Int(b[2])      # big-endian, per the reference
+    blk = max(64, (5 * Int(n)) >> 1)
+    buf = squeeze!(xof, blk)
+    pos = 1
+    @inbounds while i <= n
+        if pos + 1 > length(buf)
+            buf = squeeze!(xof, blk)
+            pos = 1
+        end
+        elt = (Int(buf[pos]) << 8) + Int(buf[pos + 1])   # big-endian, per the reference
+        pos += 2
         if elt < bound
-            out[i] = elt % q
+            # `elt % q` would be an integer division -- `q` arrives as a keyword
+            # argument, so it is not a compile-time constant and LLVM cannot
+            # turn it into a multiply-shift.  That division was ~40% of
+            # hash_to_point (docs/debug_log.md #038).  But `elt < bound = k*q`
+            # with k = 5, so the remainder is at most four conditional
+            # subtractions away, and this says the same thing the rejection
+            # bound above already says.
+            r = elt
+            while r >= q
+                r -= q
+            end
+            out[i] = r
             i += 1
         end
     end
@@ -321,10 +354,36 @@ function falcon_verify(pk::FalconPublicKey, message, signature::AbstractVector{U
     length(signature) == p.sig_bytes || return false
 
     point = hash_to_point(msg, salt, p.n; q = p.q)
-    s2q = Int[mod(c, p.q) for c in s2]
-    s1 = centered(polysubq(point, polymulq(s2q, pk.h, p.q), p.q), p.q)
 
-    return sqnorm(s1, s2) <= p.sig_bound
+    # `polymulq_fast!` is the iterative in-place NTT of ntt.jl rather than the
+    # schoolbook convolution.  It computes the same ring element -- the test
+    # suite asserts that at every degree -- and it is the difference between
+    # 0.157 ms and 0.021 ms at n = 512, which is most of verification
+    # (docs/debug_log.md #038).
+    #
+    # The subtraction, the centring and the norm are folded into one pass here
+    # instead of three array-returning calls.  That is not micro-optimisation
+    # for its own sake: at this point the remaining cost of verification is
+    # almost entirely the per-array traffic, so each intermediate that is not
+    # materialised is a measurable fraction of the whole.
+    n = p.n
+    prod = Vector{UInt32}(undef, n)
+    scratch = Vector{UInt32}(undef, n)
+    polymulq_fast!(prod, s2, pk.h, scratch)
+
+    q = p.q
+    half = q >> 1
+    acc = 0
+    @inbounds for i in 1:n
+        d = point[i] - Int(prod[i])                 # in (-q, q)
+        d < 0 && (d += q)                           # now in [0, q)
+        d > half && (d -= q)                        # centred: (-q/2, q/2]
+        acc += d * d + Int(s2[i]) * Int(s2[i])
+    end
+    # `acc` cannot overflow: |d|, |s2[i]| <= q/2 = 6144, so each term is under
+    # 2^26 and 2n of them stay under 2^38.  `sig_bound` is a BigInt, and the
+    # comparison promotes.
+    return acc <= p.sig_bound
 end
 
 """

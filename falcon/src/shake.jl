@@ -109,29 +109,142 @@ const _KECCAK_ROT, _KECCAK_PI = _keccak_rho_pi()
 The Keccak-f[1600] permutation, in place, on 25 `UInt64` lanes.
 """
 function _keccak_f1600!(A::Vector{UInt64})
-    C = Vector{UInt64}(undef, 5)
-    B = Vector{UInt64}(undef, 25)
-    @inbounds for round in 1:24
-        # theta
-        for x in 1:5
-            C[x] = A[x] ⊻ A[x + 5] ⊻ A[x + 10] ⊻ A[x + 15] ⊻ A[x + 20]
-        end
-        for x in 1:5
-            d = C[mod1(x - 1, 5)] ⊻ bitrotate(C[mod1(x + 1, 5)], 1)
-            for y in 0:4
-                A[x + 5y] ⊻= d
-            end
-        end
-        # rho and pi
-        for i in 1:25
-            B[i] = bitrotate(A[_KECCAK_PI[i]], _KECCAK_ROT[_KECCAK_PI[i]])
-        end
-        # chi
-        for y in 0:4, x in 1:5
-            A[x + 5y] = B[x + 5y] ⊻ ((~B[mod1(x + 1, 5) + 5y]) & B[mod1(x + 2, 5) + 5y])
-        end
-        # iota
-        A[1] ⊻= _KECCAK_RC[round]
+    @inbounds begin
+    # The 25 lanes are pulled into locals for the whole permutation, so the
+    # rounds run in registers.  The previous version kept them in the array and
+    # allocated two temporaries per call; more importantly it addressed the
+    # rho/pi step through `_KECCAK_PI[i]` and computed `mod1(x + 1, 5)` inside
+    # chi, i.e. a table indirection and an integer division per lane per round.
+    # That cost 1.11 us per permutation against the C reference's 0.49; this
+    # form is generated from the same two tables, so the constants below are
+    # not transcribed by hand (docs/debug_log.md #038).
+        a1 = A[1]
+        a2 = A[2]
+        a3 = A[3]
+        a4 = A[4]
+        a5 = A[5]
+        a6 = A[6]
+        a7 = A[7]
+        a8 = A[8]
+        a9 = A[9]
+        a10 = A[10]
+        a11 = A[11]
+        a12 = A[12]
+        a13 = A[13]
+        a14 = A[14]
+        a15 = A[15]
+        a16 = A[16]
+        a17 = A[17]
+        a18 = A[18]
+        a19 = A[19]
+        a20 = A[20]
+        a21 = A[21]
+        a22 = A[22]
+        a23 = A[23]
+        a24 = A[24]
+        a25 = A[25]
+
+    for round in 1:24
+        # --- theta ---------------------------------------------------
+        c1 = a1 ⊻ a6 ⊻ a11 ⊻ a16 ⊻ a21
+        c2 = a2 ⊻ a7 ⊻ a12 ⊻ a17 ⊻ a22
+        c3 = a3 ⊻ a8 ⊻ a13 ⊻ a18 ⊻ a23
+        c4 = a4 ⊻ a9 ⊻ a14 ⊻ a19 ⊻ a24
+        c5 = a5 ⊻ a10 ⊻ a15 ⊻ a20 ⊻ a25
+        d1 = c5 ⊻ bitrotate(c2, 1)
+        d2 = c1 ⊻ bitrotate(c3, 1)
+        d3 = c2 ⊻ bitrotate(c4, 1)
+        d4 = c3 ⊻ bitrotate(c5, 1)
+        d5 = c4 ⊻ bitrotate(c1, 1)
+        a1 ⊻= d1; a6 ⊻= d1; a11 ⊻= d1; a16 ⊻= d1; a21 ⊻= d1
+        a2 ⊻= d2; a7 ⊻= d2; a12 ⊻= d2; a17 ⊻= d2; a22 ⊻= d2
+        a3 ⊻= d3; a8 ⊻= d3; a13 ⊻= d3; a18 ⊻= d3; a23 ⊻= d3
+        a4 ⊻= d4; a9 ⊻= d4; a14 ⊻= d4; a19 ⊻= d4; a24 ⊻= d4
+        a5 ⊻= d5; a10 ⊻= d5; a15 ⊻= d5; a20 ⊻= d5; a25 ⊻= d5
+
+        # --- rho and pi ---------------------------------------------
+        b1 = a1
+        b2 = bitrotate(a7, 44)
+        b3 = bitrotate(a13, 43)
+        b4 = bitrotate(a19, 21)
+        b5 = bitrotate(a25, 14)
+        b6 = bitrotate(a4, 28)
+        b7 = bitrotate(a10, 20)
+        b8 = bitrotate(a11, 3)
+        b9 = bitrotate(a17, 45)
+        b10 = bitrotate(a23, 61)
+        b11 = bitrotate(a2, 1)
+        b12 = bitrotate(a8, 6)
+        b13 = bitrotate(a14, 25)
+        b14 = bitrotate(a20, 8)
+        b15 = bitrotate(a21, 18)
+        b16 = bitrotate(a5, 27)
+        b17 = bitrotate(a6, 36)
+        b18 = bitrotate(a12, 10)
+        b19 = bitrotate(a18, 15)
+        b20 = bitrotate(a24, 56)
+        b21 = bitrotate(a3, 62)
+        b22 = bitrotate(a9, 55)
+        b23 = bitrotate(a15, 39)
+        b24 = bitrotate(a16, 41)
+        b25 = bitrotate(a22, 2)
+
+        # --- chi ----------------------------------------------------
+        a1 = b1 ⊻ (~b2 & b3)
+        a2 = b2 ⊻ (~b3 & b4)
+        a3 = b3 ⊻ (~b4 & b5)
+        a4 = b4 ⊻ (~b5 & b1)
+        a5 = b5 ⊻ (~b1 & b2)
+        a6 = b6 ⊻ (~b7 & b8)
+        a7 = b7 ⊻ (~b8 & b9)
+        a8 = b8 ⊻ (~b9 & b10)
+        a9 = b9 ⊻ (~b10 & b6)
+        a10 = b10 ⊻ (~b6 & b7)
+        a11 = b11 ⊻ (~b12 & b13)
+        a12 = b12 ⊻ (~b13 & b14)
+        a13 = b13 ⊻ (~b14 & b15)
+        a14 = b14 ⊻ (~b15 & b11)
+        a15 = b15 ⊻ (~b11 & b12)
+        a16 = b16 ⊻ (~b17 & b18)
+        a17 = b17 ⊻ (~b18 & b19)
+        a18 = b18 ⊻ (~b19 & b20)
+        a19 = b19 ⊻ (~b20 & b16)
+        a20 = b20 ⊻ (~b16 & b17)
+        a21 = b21 ⊻ (~b22 & b23)
+        a22 = b22 ⊻ (~b23 & b24)
+        a23 = b23 ⊻ (~b24 & b25)
+        a24 = b24 ⊻ (~b25 & b21)
+        a25 = b25 ⊻ (~b21 & b22)
+
+        # --- iota ---------------------------------------------------
+        a1 ⊻= _KECCAK_RC[round]
+    end
+
+        A[1] = a1
+        A[2] = a2
+        A[3] = a3
+        A[4] = a4
+        A[5] = a5
+        A[6] = a6
+        A[7] = a7
+        A[8] = a8
+        A[9] = a9
+        A[10] = a10
+        A[11] = a11
+        A[12] = a12
+        A[13] = a13
+        A[14] = a14
+        A[15] = a15
+        A[16] = a16
+        A[17] = a17
+        A[18] = a18
+        A[19] = a19
+        A[20] = a20
+        A[21] = a21
+        A[22] = a22
+        A[23] = a23
+        A[24] = a24
+        A[25] = a25
     end
     return A
 end
@@ -234,15 +347,45 @@ function squeeze!(x::SHAKE256XOF, n::Integer)
     n >= 0 || throw(ArgumentError("cannot squeeze a negative number of bytes"))
     x.squeezing || _finalize!(x)
     out = Vector{UInt8}(undef, n)
-    for k in 1:n
+    k = 1
+    while k <= n
         if x.pos == SHAKE256_RATE
             _keccak_f1600!(x.state)
             x.pos = 0
         end
-        out[k] = _get_byte(x.state, x.pos)
-        x.pos += 1
+        m = min(SHAKE256_RATE - x.pos, n - k + 1)
+        _copy_state_bytes!(out, k, x.state, x.pos, m)
+        x.pos += m
+        k += m
     end
     return out
+end
+
+"""
+Copy `m` bytes of sponge state, starting at byte offset `pos`, into `out[k...]`.
+
+On a little-endian machine the byte order of the `UInt64` lanes *is* the
+sponge's byte order, so this is one `memcpy`; extracting a byte at a time cost
+a lane index, a shift and a mask per byte, and squeezing is on the critical
+path of `hash_to_point` (docs/debug_log.md #038).
+
+The byte-at-a-time path is kept for big-endian machines, where the lane layout
+and the sponge layout disagree and the memcpy would be wrong.  It is not dead
+code that cannot be reached -- it is the correct implementation on hardware
+this project has not been run on.
+"""
+@inline function _copy_state_bytes!(out::Vector{UInt8}, k::Int,
+                                    state::Vector{UInt64}, pos::Int, m::Int)
+    if Base.ENDIAN_BOM == 0x04030201                     # little-endian
+        GC.@preserve out state begin
+            unsafe_copyto!(pointer(out, k), Ptr{UInt8}(pointer(state)) + pos, m)
+        end
+    else
+        @inbounds for t in 0:(m - 1)
+            out[k + t] = _get_byte(state, pos + t)
+        end
+    end
+    return nothing
 end
 
 """

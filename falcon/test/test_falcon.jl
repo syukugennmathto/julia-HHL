@@ -222,4 +222,35 @@
         @test 0.8 * expected < m < 1.2 * expected
         @test all(nn -> nn <= FALCON_512.sig_bound, norms)
     end
+
+    @testset "hash_to_point is unchanged by the block squeeze" begin
+        # Regression test for docs/debug_log.md #038.  hash_to_point used to
+        # draw two bytes at a time; it now squeezes a block and indexes into it,
+        # and reduces by conditional subtraction rather than by `%`.  Both are
+        # meant to be invisible.  The oracle is the original formulation, kept
+        # here verbatim, because "same bytes read differently" is exactly the
+        # kind of claim that is easy to get subtly wrong at a block boundary.
+        function h2p_twobytes(message, salt, n; q = Q)
+            k = (1 << 16) ÷ q
+            bound = k * q
+            xof = shake256_xof(salt, message)
+            out = Int[]
+            while length(out) < n
+                b = squeeze!(xof, 2)
+                elt = (Int(b[1]) << 8) + Int(b[2])
+                elt < bound && push!(out, elt % q)
+            end
+            return out
+        end
+        rng = MersenneTwister(20260822)
+        for n in (2, 8, 512, 1024), mlen in (0, 1, 17, 200)
+            m = rand(rng, UInt8, mlen)
+            s = rand(rng, UInt8, SALT_LEN)
+            @test hash_to_point(m, s, n) == h2p_twobytes(m, s, n)
+        end
+        # every coefficient is a valid residue, and the rejection really rejects
+        pt = hash_to_point(rand(rng, UInt8, 32), rand(rng, UInt8, SALT_LEN), 1024)
+        @test all(c -> 0 <= c < Q, pt)
+        @test length(unique(pt)) > 500          # not degenerate
+    end
 end

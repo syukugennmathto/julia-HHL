@@ -95,25 +95,29 @@ Returns unsigned field values; the caller applies any sign convention.
 """
 function _unpack_bits(bytes::AbstractVector{UInt8}, n::Int, bits::Int)
     out = Vector{Int}(undef, n)
-    acc = UInt32(0)
+    # A UInt64 accumulator holds at least seven spare bytes, so the refill is a
+    # loop over whole bytes with the bounds test hoisted, rather than one test
+    # and one shift per byte with a nested drain loop.  Same bits in the same
+    # order; this is on verification's critical path (docs/debug_log.md #038).
+    need = (n * bits + 7) >> 3
+    length(bytes) >= need || throw(ArgumentError("truncated encoding"))
+    acc = UInt64(0)
     acc_len = 0
-    mask = (UInt32(1) << bits) - UInt32(1)
-    u = 1
+    mask = (UInt64(1) << bits) - UInt64(1)
     pos = 1
-    while u <= n
-        pos <= length(bytes) || throw(ArgumentError("truncated encoding"))
-        acc = (acc << 8) | UInt32(bytes[pos]); pos += 1
-        acc_len += 8
-        while acc_len >= bits && u <= n
-            acc_len -= bits
-            out[u] = Int((acc >> acc_len) & mask)
-            u += 1
+    @inbounds for u in 1:n
+        while acc_len < bits
+            acc = (acc << 8) | UInt64(bytes[pos]); pos += 1
+            acc_len += 8
         end
+        acc_len -= bits
+        out[u] = Int((acc >> acc_len) & mask)
     end
+    acc = UInt64(acc)
     # The C decoders reject a non-zero remainder in the last byte, so that an
     # encoding is unique.  Without this check a signature or key could be
     # mutated without detection, which is a real (if minor) malleability issue.
-    leftover = acc & ((UInt32(1) << acc_len) - UInt32(1))
+    leftover = acc & ((UInt64(1) << acc_len) - UInt64(1))
     leftover == 0 || throw(ArgumentError(
         "non-zero padding bits in the last byte: the encoding is not canonical"))
     return out
@@ -364,35 +368,69 @@ Without them a signature could be altered without becoming invalid.
 function decompress_sig(x::AbstractVector{UInt8}, slen::Integer, n::Integer)
     length(x) > slen && return nothing
     total = 8 * length(x)
-    bit(i) = ((x[(i - 1) >> 3 + 1] >> (7 - ((i - 1) & 7))) & 1) == 1
 
-    v = Int[]
+    # The sign-and-7-low-bits header is read as a byte rather than as eight
+    # calls to a bit accessor.  Same bits, and it takes the header from eight
+    # shift-and-mask sequences to one or two -- decompress was ~14% of
+    # verification before this (docs/debug_log.md #038).  The unary tail still
+    # goes bit by bit, because that is what it is.
+    @inline function bit(i::Int)
+        @inbounds return ((x[(i - 1) >> 3 + 1] >> (7 - ((i - 1) & 7))) & 1) == 1
+    end
+    # Eight bits starting at 1-based bit position `i`, which may straddle a byte.
+    @inline function byte_at(i::Int)
+        b = (i - 1) >> 3 + 1
+        off = (i - 1) & 7
+        @inbounds hi = UInt16(x[b]) << 8
+        @inbounds lo = b + 1 <= length(x) ? UInt16(x[b + 1]) : UInt16(0)
+        return UInt8(((hi | lo) >> (8 - off)) & 0xff)
+    end
+
+    v = Vector{Int}(undef, n)
+    got = 0
     i = 1
-    while length(v) < n
+    @inbounds while got < n
         i + 7 <= total || return nothing
-        neg = bit(i)
-        low = 0
-        for k in 1:7
-            low = (low << 1) | (bit(i + k) ? 1 : 0)
-        end
+        h = byte_at(i)
+        neg = (h & 0x80) != 0
+        low = Int(h & 0x7f)
         i += 8
+        # The unary tail, with the overwhelmingly common case first.
+        #
+        # A first attempt read it a byte at a time and used `leading_zeros`,
+        # reasoning that one instruction beats k loop iterations.  It was
+        # *slower* -- 0.0047 ms to 0.0061 -- because `byte_at` costs two loads
+        # and a shift and the runs are almost always length 0 or 1, so the
+        # clever path paid for itself on every coefficient and saved nothing
+        # (docs/debug_log.md #038).  The high bits are Golomb-Rice coded: the
+        # coefficients are Gaussian with sigma ~ 165, so `high = coef >> 7` is
+        # 0 or 1 the great majority of the time.
         high = 0
-        while true
-            i <= total || return nothing
-            bit(i) && break
-            high += 1
-            i += 1
-            high > 2040 && return nothing        # runaway unary run
+        i <= total || return nothing
+        if bit(i)
+            i += 1                               # high = 0: one bit test
+        else
+            while true
+                i += 1
+                high += 1
+                i <= total || return nothing
+                bit(i) && break
+                high > 2040 && return nothing    # runaway unary run
+            end
+            i += 1                               # consume the terminating 1
         end
-        i += 1                                   # consume the terminating 1
         coef = low + (high << 7)
         (coef == 0 && neg) && return nothing     # -0 is not a valid encoding
-        push!(v, neg ? -coef : coef)
+        got += 1
+        v[got] = neg ? -coef : coef
     end
-    # every remaining bit must be zero
-    while i <= total
+    # every remaining bit must be zero.  Whole bytes are checked as bytes.
+    @inbounds while i <= total && ((i - 1) & 7) != 0
         bit(i) && return nothing
         i += 1
+    end
+    @inbounds for b in ((i - 1) >> 3 + 1):length(x)
+        x[b] == 0x00 || return nothing
     end
     return v
 end

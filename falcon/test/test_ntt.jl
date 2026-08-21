@@ -176,4 +176,55 @@
             @test ntt(polysubq(f, g)) == ntt_sub(F, G)
         end
     end
+
+    @testset "the iterative in-place NTT agrees with everything else" begin
+        # Regression test for docs/debug_log.md #038.  ntt.jl now carries two
+        # transforms: the recursive one above, which follows the specification's
+        # tree ordering, and an iterative Cooley-Tukey/Gentleman-Sande pair used
+        # only to multiply.  The second leaves its intermediate values in
+        # bit-reversed order, which is *not* the specification's order -- that is
+        # sound precisely because multiplication never looks at an individual
+        # coordinate, and this testset is what holds that claim in place.
+        rng = MersenneTwister(20260821)
+        for n in (2, 4, 8, 16, 32, 64, 128, 256, 512, 1024)
+            for _ in 1:3
+                f = rand(rng, 0:(Q - 1), n)
+                g = rand(rng, 0:(Q - 1), n)
+                # against the schoolbook convolution, which shares no code
+                @test polymulq_fast(f, g) == polymulq(f, g)
+                # and against the recursive NTT, which shares no code either
+                @test polymulq_fast(f, g) == polymulq_ntt(f, g)
+            end
+            # inputs that are not already reduced: signatures carry centred
+            # coefficients, so negative values reach this path in verification
+            f = rand(rng, -30000:30000, n)
+            g = rand(rng, 0:(Q - 1), n)
+            @test polymulq_fast(f, g) == polymulq(f, g)
+
+            # the transforms are mutually inverse in their own ordering
+            a = UInt32.(rand(rng, 0:(Q - 1), n))
+            b = copy(a)
+            Falcon.ntt_ip!(b, ntt_zetas(n))
+            @test b != a || n == 1                    # it did something
+            Falcon.intt_ip!(b, ntt_zetas(n))
+            @test b == a
+        end
+
+        # The root table really is negacyclic: psi^n = -1, not +1.  Getting
+        # this wrong gives a *cyclic* convolution, which is a different ring
+        # and would show up only as wrong signatures.
+        for n in (2, 8, 512, 1024)
+            psi = Falcon._psi(n)
+            @test powermod(psi, n, Q) == Q - 1
+            @test powermod(psi, 2n, Q) == 1
+            @test length(ntt_zetas(n)) == n
+        end
+
+        # in-place really is in place: no allocation once the tables are warm
+        let n = 512, a = UInt32.(rand(rng, 0:(Q - 1), n)), z = ntt_zetas(n)
+            Falcon.ntt_ip!(copy(a), z)                # warm up
+            b = copy(a)
+            @test (@allocated Falcon.ntt_ip!(b, z)) == 0
+        end
+    end
 end

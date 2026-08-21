@@ -139,3 +139,31 @@
         @test randombytes!(chacha20(s1), 64) != randombytes!(chacha20(s3), 64)
     end
 end
+
+@testset "squeezing in pieces gives the same stream as squeezing at once" begin
+    # Regression test for docs/debug_log.md #038.  squeeze! now copies whole
+    # runs of state bytes with one memcpy instead of extracting a byte at a
+    # time, which is only correct if the lane layout and the sponge's byte order
+    # agree -- they do on little-endian, and the byte-at-a-time path remains for
+    # machines where they do not.  A boundary bug here would show up as a
+    # difference between one big squeeze and several small ones.
+    rng = MersenneTwister(20260823)
+    for total in (1, 7, 8, 9, 135, 136, 137, 271, 272, 273, 1000, 4096)
+        once = shake256(b"stream test", total)
+        x = shake256_xof(b"stream test")
+        piece = UInt8[]
+        while length(piece) < total
+            k = min(rand(rng, 1:41), total - length(piece))
+            append!(piece, squeeze!(x, k))
+        end
+        @test piece == once
+        # and squeezing exactly on the rate boundary, repeatedly
+        y = shake256_xof(b"stream test")
+        blocks = UInt8[]
+        while length(blocks) < total
+            append!(blocks, squeeze!(y, min(136, total - length(blocks))))
+        end
+        @test blocks == once
+    end
+    @test shake256(b"", 0) == UInt8[]
+end
