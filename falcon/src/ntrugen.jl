@@ -438,71 +438,102 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
                       F::Vector{BigInt}, G::Vector{BigInt})
     n = length(f)
 
-    # A *deep* copy.  `copy(F)` duplicates the array but not the `BigInt`s in
-    # it, which was fine while the loop rebound `F[i]` to a freshly allocated
-    # result -- and is not fine now that it mutates them in place.  Getting this
-    # wrong would corrupt the caller's `(F, G)` silently.
+    # A *deep* copy: the loop below mutates these in place, and `copy(F)`
+    # duplicates the array but not the `BigInt`s in it, so a shallow copy would
+    # corrupt the caller's (F, G) (docs/debug_log.md #040).
     F = BigInt[Base.GMP.MPZ.set!(BigInt(), c) for c in F]
     G = BigInt[Base.GMP.MPZ.set!(BigInt(), c) for c in G]
 
-    size = max(53, maximum(bitsize, f), maximum(bitsize, g))
+    # ---- the scale budget --------------------------------------------------
+    #
+    # This is the branch's whole point.  The specification's Reduce, which the
+    # Python reference implements and `main` follows, derives the scaling of the
+    # correction from the *current* sizes:
+    #
+    #     size  = max(53, bits(f), bits(g))
+    #     shift = Size - size
+    #     k     = round( (F f* + G g*) / (f f* + g g*) )   from 53-bit approximations
+    #
+    # and then stops when `k` rounds to zero.  Working through the magnitudes,
+    # that `k` is about `2^(53 - bits(f))`.  Where f and g are *narrower* than
+    # 53 bits the correction is large and the reduction grinds along; where they
+    # are wider, `k` is about 2^0 and rounding it is a coin flip, so the
+    # reduction gives up with (F, G) still enormous.  Measured, that happens at
+    # every level below n = 128, and nine levels of reduction collapse into one
+    # run on 6240-bit coefficients (docs/debug_log.md #041).
+    #
+    # The C reference instead carries an explicit *bit budget* and marches it
+    # down: `k` is defined as the quotient divided by `2^scale_k`, with
+    # `scale_k` starting at `bits(F,G) - bits(f,g)` and dropping by 25 each
+    # pass.  Because the scaling comes from the schedule rather than from the
+    # current sizes, `k` is a meaningful integer of about 25 bits every time and
+    # never rounds away.  [C-ref] keygen.c:3165-3300 (`solve_NTRU_intermediate`)
+    #
+    # The subtraction is the same one either way -- `(F, G) -= k*(f, g)` scaled
+    # -- so `f*G - g*F` is preserved exactly, and the result is still a valid
+    # solution of the NTRU equation.  It is a *different* valid solution:
+    # Babai reduction is not canonical, and this branch therefore does not
+    # reproduce the Python reference's (F, G).  See README.md.
+    size_fg = max(maximum(bitsize, f), maximum(bitsize, g))
+    scale_fg = max(0, size_fg - 53)
+    scale_k = max(0, max(maximum(bitsize, F), maximum(bitsize, G)) - size_fg)
 
-    # Top 53 bits of each coefficient: exactly representable as Float64.
-    # `>>` on a negative BigInt is an arithmetic shift (floor division by a
-    # power of two), matching Python's `>>`.  Julia agrees with Python here;
-    # it is `div` vs `fld` that disagree (see xgcd_floor).
-    fa = Float64[Float64(c >> (size - 53)) for c in f]
-    ga = Float64[Float64(c >> (size - 53)) for c in g]
+    fa = Float64[Float64(c >> scale_fg) for c in f]
+    ga = Float64[Float64(c >> scale_fg) for c in g]
     fa_fft = fft(fa)
     ga_fft = fft(ga)
     den_fft = add_fft(mul_fft(fa_fft, adj_fft(fa_fft)),
                       mul_fft(ga_fft, adj_fft(ga_fft)))
 
-    # Scratch reused across iterations.  This loop runs 261 times at n = 128 in
-    # a FALCON-512 key generation, and that one call was 83% of the whole
-    # (docs/debug_log.md #040).
     Fa = Vector{Float64}(undef, n)
     Ga = Vector{Float64}(undef, n)
     tmp = BigInt()
     acc = BigInt()
 
     while true
-        Size = max(53, maximum(bitsize, F), maximum(bitsize, G))
-        Size < size && break
-
-        sh = Size - 53
+        Size = max(maximum(bitsize, F), maximum(bitsize, G))
+        scale_FG = max(0, Size - 53)
         @inbounds for i in 1:n
-            Base.GMP.MPZ.fdiv_q_2exp!(acc, F[i], sh); Fa[i] = Float64(acc)
-            Base.GMP.MPZ.fdiv_q_2exp!(acc, G[i], sh); Ga[i] = Float64(acc)
+            Base.GMP.MPZ.fdiv_q_2exp!(acc, F[i], scale_FG); Fa[i] = Float64(acc)
+            Base.GMP.MPZ.fdiv_q_2exp!(acc, G[i], scale_FG); Ga[i] = Float64(acc)
         end
         Fa_fft = fft(Fa)
         Ga_fft = fft(Ga)
 
         num_fft = add_fft(mul_fft(Fa_fft, adj_fft(fa_fft)),
                           mul_fft(Ga_fft, adj_fft(ga_fft)))
-        k = ifft(div_fft(num_fft, den_fft))
-        ki = BigInt[BigInt(round(elt)) for elt in k]
-        all(iszero, ki) && break
+        ratio = ifft(div_fft(num_fft, den_fft))
 
-        fk = karamul(f, ki)
-        gk = karamul(g, ki)
-        shift = Size - size
-
-        # `F[i] -= fk[i] << shift` is what this says, and written that way it
-        # was **64% of key generation**: `fk[i]` is about 56 bits and `shift` is
-        # about 6250, so each coefficient allocated a ~790-byte BigInt that is
-        # almost entirely zeros, and then another for the difference.  Two
-        # allocations per coefficient, 256 per iteration, 261 iterations.
-        #
-        # In place, GMP does the same arithmetic into memory that already
-        # exists.  The limb count is unchanged; what goes away is the
-        # allocation and the collector behind it (docs/debug_log.md #040).
+        # `ratio` is the true quotient F/f scaled by 2^(scale_fg - scale_FG);
+        # we want it scaled by 2^(-scale_k), so correct by 2^(-dc).
+        dc = scale_k - scale_FG + scale_fg
+        ki = Vector{BigInt}(undef, n)
         @inbounds for i in 1:n
-            Base.GMP.MPZ.mul_2exp!(tmp, fk[i], shift)
-            Base.GMP.MPZ.sub!(F[i], tmp)
-            Base.GMP.MPZ.mul_2exp!(tmp, gk[i], shift)
-            Base.GMP.MPZ.sub!(G[i], tmp)
+            x = ldexp(real(ratio[i]), -dc)
+            # A correction that does not fit an Int64 means the descent has
+            # gone wrong for this (f, g); the reference bails out and lets key
+            # generation resample, and so do we.
+            isfinite(x) && abs(x) < 9.0e18 ||
+                throw(NTRUSolveFailure("Babai correction out of range; resample f, g"))
+            ki[i] = BigInt(round(Int64, x))
         end
+
+        if !all(iszero, ki)
+            fk = karamul(f, ki)
+            gk = karamul(g, ki)
+            @inbounds for i in 1:n
+                Base.GMP.MPZ.mul_2exp!(tmp, fk[i], scale_k)
+                Base.GMP.MPZ.sub!(F[i], tmp)
+                Base.GMP.MPZ.mul_2exp!(tmp, gk[i], scale_k)
+                Base.GMP.MPZ.sub!(G[i], tmp)
+            end
+        end
+
+        # Unlike the specification's loop, an all-zero `k` is *not* a stopping
+        # condition -- it just means this pass had nothing to remove at this
+        # scale.  The loop is bounded by the schedule instead.
+        scale_k <= 0 && break
+        scale_k = max(0, scale_k - 25)
     end
     return (F, G)
 end
