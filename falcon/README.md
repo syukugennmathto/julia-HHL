@@ -37,7 +37,11 @@
 
 # FALCON (FN-DSA) Julia 仕様準拠実装
 
-FALCON / FN-DSA（NIST FIPS 206 ドラフト）を Julia で仕様準拠実装する長期プロジェクト。
+FALCON を Julia で仕様準拠実装する長期プロジェクト。
+準拠先は **Falcon 仕様書 v1.2（01/10/2020）**、すなわち round-3 提出版である。
+FN-DSA は NIST が FIPS 206 で Falcon に与えた名前だが、
+**そのドラフトは読めていない**ので、FIPS 206 が加えた変更
+（ドメイン分離、`ctx` など）は反映していない（`docs/refs.md`）。
 目標は **FALCON-512 の keygen / sign / verify が KAT を通ること**。
 
 定数時間性・サイドチャネル耐性は**スコープ外**。ただし「本来ここが定数時間実装の

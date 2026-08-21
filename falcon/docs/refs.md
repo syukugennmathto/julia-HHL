@@ -65,6 +65,20 @@ MIT ではないので、全文を vendor しない。
 | 資料 | 状態 |
 |:---|:---|
 | **FIPS 206 ドラフト**（FN-DSA） | 未入手。実行環境の egress ポリシーが nvlpubs.nist.gov を遮断している（`docs/debug_log.md` #002）。このリポジトリが「FN-DSA」を名乗る根拠は Falcon 仕様書 v1.2 の方であり、FIPS 206 が Falcon に加えた変更（ドメイン分離、`ctx` など）は**反映していない** |
+
+### 番号を間違えやすいので注記
+
+NIST の PQC 標準は 4 本あり、**この実装に関係するのは 206 だけ**である:
+
+| | 名前 | 元 | この実装との関係 |
+|:---|:---|:---|:---|
+| FIPS 203 | ML-KEM | Kyber | 無関係（鍵カプセル化） |
+| FIPS 204 | ML-DSA | Dilithium | 無関係。ただし `docs/math/` の対比の相手 |
+| FIPS 205 | SLH-DSA | SPHINCS+ | **無関係**（ハッシュベース署名。格子ではない） |
+| **FIPS 206** | **FN-DSA** | **Falcon** | **これが要る** |
+
+2026-08-21 に FIPS 205（SLH-DSA、2024-08-13 発行、61 頁）が届いたが、
+これは SPHINCS+ の標準であって Falcon ではない。定数は 1 つも関係しない。
 | 提出パッケージの `Supporting_Documentation/additional/` | 未入手。`parameters.py`（パラメータ導出の自動化）と `test-vector-sampler-falcon{512,1024}.txt`（より詳細な SamplerZ ベクタ）が入っているはず。前者があれば σmin の ε が `[derived]` でなくなる |
 
 **#002 の「仕様書 PDF に到達できない」は 2026-08-21 に解消した**（#046）。

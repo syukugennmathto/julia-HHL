@@ -1,8 +1,17 @@
 """
     Falcon
 
-A specification-conformant Julia implementation of FALCON / FN-DSA
-(NIST FIPS 206, draft).
+A specification-conformant Julia implementation of FALCON.
+
+The document this code is conformant *to* is **Falcon Specification v1.2
+(01/10/2020)**, the round-3 submission -- see `docs/refs.md` and
+`test/test_spec.jl`, which transcribe its tables.  FN-DSA is the name NIST
+gave Falcon for **FIPS 206**, and that draft has **not** been read here (the
+authoring environment cannot reach nvlpubs.nist.gov, docs/debug_log.md #002),
+so whatever FIPS 206 changed relative to the submission -- domain separation,
+the `ctx` string, any renaming -- is **not** reflected.  Read "FN-DSA" in this
+repository as "Falcon, the algorithm that became FN-DSA", not as a claim of
+FIPS 206 conformance.
 
 Scope and non-goals
 -------------------
