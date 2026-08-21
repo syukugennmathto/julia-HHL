@@ -212,8 +212,14 @@ function main(args)
     tf = fft(Float64.(point))
     measure!("ifft (one inverse transform)", 2, _ -> ifft(tf); iters = 50)
     measure!("mul_fft (one FFT-domain product)", 2, _ -> mul_fft(tf, tf); iters = 50)
+    # samplerz's precondition is 1 < sigmin < sigma < 1.8205, and the sigma it
+    # is actually called with is a *leaf* sigma of the normalised tree -- NOT
+    # the key's sigma (165.7), which is a width in the lattice, not in Z.
+    # Passing p.sigma here throws inside approxexp; that is the sampler
+    # correctly refusing an out-of-range input, not a defect.
+    leafsig = first(leaf_sigmas(sk.tree))
     measure!("samplerz x n (the sampler alone)", 2,
-             s -> (bs = bytesource_of(s); for _ in 1:n; samplerz(0.5, p.sigma, p.sigma_min, bs); end);
+             s -> (for _ in 1:n; samplerz(0.5, leafsig, p.sigma_min, s); end);
              iters = 10, setup = ssrc)
     print_rows(); empty!(ROWS)
 
