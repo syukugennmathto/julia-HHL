@@ -434,8 +434,141 @@ time in the same way signing is, since it runs once and its timing does not
 correlate with a per-message secret.  The reference is nonetheless careful, and
 the loop trip count does depend on the key.
 """
+const BABAI_STEP = 25
+
+# GMP's fused multiply-accumulate.  `Base.GMP.MPZ` wraps a lot of libgmp but
+# not `addmul`/`submul`, and those two are exactly what this file wants: they
+# do `r += a*b` and `r -= a*b` *into* `r`, with no temporary, where the Julia
+# operators would allocate one GMP object for the product and another for the
+# sum.  Measured, allocation of `BigInt`s was 55% of the whole descent
+# (docs/debug_log.md #044), so removing the temporaries is the optimisation.
+#
+# `Ref{BigInt}` is the calling convention Base itself uses for `mpz_t`.
+@inline _addmul_ui!(r::BigInt, a::BigInt, b::Culong) =
+    ccall((:__gmpz_addmul_ui, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Culong), r, a, b)
+
+@inline _submul_ui!(r::BigInt, a::BigInt, b::Culong) =
+    ccall((:__gmpz_submul_ui, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Culong), r, a, b)
+
+"""
+    _negacyclic_addmul!(acc, f, ki) -> acc
+
+`acc = f * ki` in `Z[x]/(x^n + 1)`, with `ki` a vector of machine integers,
+computed in place with no allocation at all.
+
+This is schoolbook, not Karatsuba, and that is deliberate.  `karamul` is
+asymptotically better and is the right choice for two vectors of comparable,
+large coefficients -- which is what the descent's `lift * conjugate` products
+are.  Here one side is a 64-bit correction, so every partial product is a
+`bignum * word`, which is exactly `mpz_addmul_ui`: one pass over the limbs,
+accumulating in place.  Karatsuba's recursion would buy `n^1.58` instead of
+`n^2` word-multiplications and pay for it with a tree of temporary `BigInt`s
+and `SubArray`s, and at these sizes the allocation is the whole cost.
+
+`ki` is usually sparse -- most corrections at a given scale are zero -- so the
+outer loop skips zeros and the true cost is `nnz(ki) * n`.
+
+## The machine-word tier is not optional
+
+The first version of this was the GMP path alone, and it made the *deep* levels
+(n <= 32, coefficients of hundreds of bits) ten times faster and the *top*
+level (n = 512, coefficients of 8 bits) seven times slower -- 1.16 ms to 7.79.
+The reason is that `karamul` has a machine-integer fast path, and at the top of
+the descent it applies: 8-bit `f` times a 25-bit correction over 512 terms is
+42 bits, so the whole convolution runs in `Int64` with no GMP at all.  Handing
+that case to `mpz_addmul_ui` replaces an add-and-multiply with a library call.
+So the same test `karamul` makes is made here, and the answer decides the tier.
+Measured both ways at every level: docs/debug_log.md #044.
+
+CONSTANT TIME: the zero skip is a data-dependent branch on a value derived from
+the secret basis, and the tier choice is a branch on its magnitude.  Key
+generation is not required to be constant time (see `babai_reduce`), and the
+reference takes the same liberty, but it is worth naming: this loop's trip
+count leaks the sparsity pattern of the corrections.
+"""
+function _negacyclic_addmul!(acc::Vector{BigInt}, f::Vector{BigInt}, ki::Vector{Int64},
+                             fbits::Int = maximum(bitsize, f))
+    n = length(f)
+    length(acc) == n || throw(DimensionMismatch("acc and f must agree"))
+    length(ki) == n || throw(DimensionMismatch("ki and f must agree"))
+
+    kmax = zero(Int64)
+    @inbounds for k in ki
+        a = abs(k)
+        kmax = ifelse(a > kmax, a, kmax)
+    end
+    # Same over-estimate as `karamul`: `bitsize` rounds up to a byte and the
+    # length term is rounded up, so passing this test is safe.
+    need = fbits + (64 - leading_zeros(kmax)) + (8 * sizeof(n) - leading_zeros(n))
+    if need <= 62
+        return _negacyclic_addmul_i64!(acc, f, ki, n)
+    end
+
+    @inbounds for i in 1:n
+        Base.GMP.MPZ.set_si!(acc[i], 0)
+    end
+    @inbounds for l in 1:n
+        k = ki[l]
+        k == 0 && continue
+        mag = Culong(abs(k))
+        neg = k < 0
+        # x^(l-1) * x^(j-1) = x^(l+j-2); the wrap at n costs a sign, since
+        # x^n = -1 in this ring.
+        base = l - 2
+        for j in 1:n
+            t = base + j
+            if t < n
+                if neg
+                    _submul_ui!(acc[t + 1], f[j], mag)
+                else
+                    _addmul_ui!(acc[t + 1], f[j], mag)
+                end
+            else
+                if neg
+                    _addmul_ui!(acc[t - n + 1], f[j], mag)
+                else
+                    _submul_ui!(acc[t - n + 1], f[j], mag)
+                end
+            end
+        end
+    end
+    return acc
+end
+
+"The `Int64` tier of [`_negacyclic_addmul!`](@ref).  No GMP, no allocation
+beyond the two working arrays."
+function _negacyclic_addmul_i64!(acc::Vector{BigInt}, f::Vector{BigInt},
+                                 ki::Vector{Int64}, n::Int)
+    fv = Vector{Int64}(undef, n)
+    @inbounds for j in 1:n
+        fv[j] = Int64(f[j])
+    end
+    av = zeros(Int64, n)
+    @inbounds for l in 1:n
+        k = ki[l]
+        k == 0 && continue
+        base = l - 2
+        for j in 1:n
+            t = base + j
+            p = k * fv[j]
+            if t < n
+                av[t + 1] += p
+            else
+                av[t - n + 1] -= p
+            end
+        end
+    end
+    @inbounds for i in 1:n
+        Base.GMP.MPZ.set_si!(acc[i], av[i])
+    end
+    return acc
+end
+
 function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
-                      F::Vector{BigInt}, G::Vector{BigInt})
+                      F::Vector{BigInt}, G::Vector{BigInt};
+                      step::Integer = BABAI_STEP)
     n = length(f)
 
     # A *deep* copy: the loop below mutates these in place, and `copy(F)`
@@ -474,7 +607,9 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
     # solution of the NTRU equation.  It is a *different* valid solution:
     # Babai reduction is not canonical, and this branch therefore does not
     # reproduce the Python reference's (F, G).  See README.md.
-    size_fg = max(maximum(bitsize, f), maximum(bitsize, g))
+    bits_f = maximum(bitsize, f)
+    bits_g = maximum(bitsize, g)
+    size_fg = max(bits_f, bits_g)
     scale_fg = max(0, size_fg - 53)
     scale_k = max(0, max(maximum(bitsize, F), maximum(bitsize, G)) - size_fg)
 
@@ -488,14 +623,20 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
     Fa = Vector{Float64}(undef, n)
     Ga = Vector{Float64}(undef, n)
     tmp = BigInt()
-    acc = BigInt()
+    scratch = BigInt()
+    # `ki` in machine integers: the correction is bounded by the schedule, and
+    # a `Vector{BigInt}` here would allocate n GMP objects per pass and then
+    # hand them to `karamul`, which allocates a tree of temporaries of its own.
+    ki = Vector{Int64}(undef, n)
+    accF = BigInt[BigInt() for _ in 1:n]
+    accG = BigInt[BigInt() for _ in 1:n]
 
     while true
         Size = max(maximum(bitsize, F), maximum(bitsize, G))
         scale_FG = max(0, Size - 53)
         @inbounds for i in 1:n
-            Base.GMP.MPZ.fdiv_q_2exp!(acc, F[i], scale_FG); Fa[i] = Float64(acc)
-            Base.GMP.MPZ.fdiv_q_2exp!(acc, G[i], scale_FG); Ga[i] = Float64(acc)
+            Base.GMP.MPZ.fdiv_q_2exp!(scratch, F[i], scale_FG); Fa[i] = Float64(scratch)
+            Base.GMP.MPZ.fdiv_q_2exp!(scratch, G[i], scale_FG); Ga[i] = Float64(scratch)
         end
         Fa_fft = fft(Fa)
         Ga_fft = fft(Ga)
@@ -507,7 +648,7 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
         # `ratio` is the true quotient F/f scaled by 2^(scale_fg - scale_FG);
         # we want it scaled by 2^(-scale_k), so correct by 2^(-dc).
         dc = scale_k - scale_FG + scale_fg
-        ki = Vector{BigInt}(undef, n)
+        nonzero = false
         @inbounds for i in 1:n
             x = ldexp(real(ratio[i]), -dc)
             # A correction that does not fit an Int64 means the descent has
@@ -515,17 +656,24 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
             # generation resample, and so do we.
             isfinite(x) && abs(x) < 9.0e18 ||
                 throw(NTRUSolveFailure("Babai correction out of range; resample f, g"))
-            ki[i] = BigInt(round(Int64, x))
+            k = round(Int64, x)
+            ki[i] = k
+            nonzero |= (k != 0)
         end
 
-        if !all(iszero, ki)
-            fk = karamul(f, ki)
-            gk = karamul(g, ki)
+        if nonzero
+            _negacyclic_addmul!(accF, f, ki, bits_f)
+            _negacyclic_addmul!(accG, g, ki, bits_g)
             @inbounds for i in 1:n
-                Base.GMP.MPZ.mul_2exp!(tmp, fk[i], scale_k)
-                Base.GMP.MPZ.sub!(F[i], tmp)
-                Base.GMP.MPZ.mul_2exp!(tmp, gk[i], scale_k)
-                Base.GMP.MPZ.sub!(G[i], tmp)
+                if scale_k == 0
+                    Base.GMP.MPZ.sub!(F[i], accF[i])
+                    Base.GMP.MPZ.sub!(G[i], accG[i])
+                else
+                    Base.GMP.MPZ.mul_2exp!(tmp, accF[i], scale_k)
+                    Base.GMP.MPZ.sub!(F[i], tmp)
+                    Base.GMP.MPZ.mul_2exp!(tmp, accG[i], scale_k)
+                    Base.GMP.MPZ.sub!(G[i], tmp)
+                end
             end
         end
 
@@ -533,7 +681,7 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
         # condition -- it just means this pass had nothing to remove at this
         # scale.  The loop is bounded by the schedule instead.
         scale_k <= 0 && break
-        scale_k = max(0, scale_k - 25)
+        scale_k = max(0, scale_k - Int(step))
     end
     return (F, G)
 end
@@ -566,7 +714,8 @@ no reason to be coprime.
 Corresponds to `NTRUSolve` of the specification.
 [Py-ref] scripts/pyref/ntrugen.py:166-186
 """
-function ntru_solve(f::Vector{BigInt}, g::Vector{BigInt}; q::Integer = Q)
+function ntru_solve(f::Vector{BigInt}, g::Vector{BigInt}; q::Integer = Q,
+                    step::Integer = BABAI_STEP)
     _checklen(f, g)
     n = length(f)
     if n == 1
@@ -578,14 +727,15 @@ function ntru_solve(f::Vector{BigInt}, g::Vector{BigInt}; q::Integer = Q)
     end
     fp = field_norm(f)
     gp = field_norm(g)
-    Fp, Gp = ntru_solve(fp, gp; q = q)
+    Fp, Gp = ntru_solve(fp, gp; q = q, step = step)
     F = karamul(lift(Fp), galois_conjugate(g))
     G = karamul(lift(Gp), galois_conjugate(f))
-    return babai_reduce(f, g, F, G)
+    return babai_reduce(f, g, F, G; step = step)
 end
 
-ntru_solve(f::AbstractVector{<:Integer}, g::AbstractVector{<:Integer}; q::Integer = Q) =
-    ntru_solve(BigInt.(f), BigInt.(g); q = q)
+ntru_solve(f::AbstractVector{<:Integer}, g::AbstractVector{<:Integer}; q::Integer = Q,
+           step::Integer = BABAI_STEP) =
+    ntru_solve(BigInt.(f), BigInt.(g); q = q, step = step)
 
 """
     ntru_equation_residual(f, g, F, G) -> Vector{BigInt}
