@@ -77,20 +77,39 @@
 # first two yields only a short lattice vector, which is not enough.
 #
 # ===========================================================================
-# WHAT TO READ OFF THE OUTPUT
+# RESULT
 # ===========================================================================
 #
-# The question this script now exists to answer is A2, and only A2:
+#   arm                                    events        rate    95% Poisson
+#   A2  complex division + D11    3 / 400000    7.5e-06   1.5e-6 .. 2.2e-5
+#   A1  hand-unrolled levels      5 / 100000    5.0e-05   1.6e-5 .. 1.2e-4
+#   A2a complex division alone    0 / 100000    0         .. 3e-5
+#   A2b D11 spelling alone        0 / 100000    0         .. 3e-5
+#   B   fpr_inv_sigma             0 / 100000    0         .. 3e-5
 #
-#   * if A2 diverges, then an implementer who reads only the standard
-#     disagrees with the reference in a way that 2024/1709's countermeasure
-#     does not fix, and the standard's text has to pin the two formulas;
-#   * if A2 does not diverge, then everything measured here is 2024/1709's,
-#     and what this project has to say about it is a reproduction.
+# **A2 is not zero.**  An implementer who reads only the standard disagrees
+# with the reference at a rate of order 1e-5 per signature, in a way that
+# section 7.2's countermeasure does not address -- that countermeasure aligns
+# the reference's two signing modes with each other, and A2's difference is
+# present in both of them.
 #
-# A1 is kept as a positive control -- it should diverge, at the rate that
-# paper's Table 2 reports (about 3e-5; we measure 5e-5) -- and B as a
-# negative control whose expected value is zero for a known reason.
+# All three A2 events carry the mechanism exactly:
+#
+#   key 70 sig  534   call 1023   mu -267.00000000000006  vs -267
+#   key 65 sig 1239   call 1023   mu  337                 vs  336.99999999999994
+#   key 68 sig 1885   call 1024   mu  285.99999999999989  vs  286
+#
+# Three of three at call 2n-1 or 2n, three of three straddling an integer with
+# `floor` on opposite sides, and in all three the leaf WIDTH at that node is
+# bit-identical between the runs -- so the divergence is carried entirely by
+# the centre, which is Lemma 1 and not Lemma 2.  These are the positions where
+# section 5 of that paper recovers the whole private key from one pair.
+#
+# What the numbers do NOT settle.  A2's interval overlaps A1's at the edge, so
+# "A2 is rarer than A1" is suggested, not established.  And A2a and A2b at
+# zero cannot say whether either respelling alone suffices or whether the two
+# together are what does it; 100000 signatures is too few to separate 7.5e-6
+# from 0.
 
 using Falcon
 using Printf

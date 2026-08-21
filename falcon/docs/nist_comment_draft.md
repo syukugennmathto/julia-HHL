@@ -4,21 +4,6 @@
 未発行である（`docs/refs.md`）。IPD が出た時点で、
 本文の節番号を確認したうえで pqc-forum に投稿する。
 
-> ## ⚠ 2026-08-21 夕 ― §1 と §3 は大幅に後退させる必要がある（#055）
->
-> ePrint 2024/1709 の原典を読んだ結果:
->
-> - **§1 の (c)**（ffSampling 最下段の手展開）は同論文 §6.1 そのもので、
->   §7.2 に対策がある。**投稿から落とすか、既知として引用に留める。**
->   そして 10 万署名で測った 5 件の発散は、この (c) によるものだった。
-> - **§1 の (a)(b)**（複素除算・`D11`）は同論文に出てこず、
->   まだ伝播するか測っていない。ここだけが残る。
-> - **§3** の「署名は変わらない」は同論文 **Lemma 2** が定理として
->   述べており、しかも予測率 1e-11 に対しこちらの実験の分解能は 3e-5。
->   「測って確かめた」と書ける水準にない。
->
-> A2 の測定結果を待って書き直すこと。それまで投稿しない。
-
 宛先: `pqc-forum@list.nist.gov`（または IPD が指定するコメント窓口）
 
 ---
@@ -35,8 +20,8 @@
 
 ## 本文（英語・草案）
 
-Subject: FIPS 206 (FN-DSA) — three places where the round-3 specification and
-the reference implementation are algebraically equal but round differently
+Subject: FIPS 206 (FN-DSA) — two formulations the round-3 specification leaves
+open, which change the signature, plus two under-specified constants
 
 Dear NIST PQC team,
 
@@ -49,14 +34,21 @@ multiply-add, and require implementations to match KATs exactly, we think the
 following observations are relevant to the draft. All of them are reproducible
 from the artifact linked at the end.
 
-**Summary.** Reproducing the reference's signatures did not require matching
-its floating-point arithmetic; it required access to its sampler's
-randomness. But three places where the specification's formulas and the
-reference's code are algebraically identical do produce different intermediate
-values, and if the standard requires bit-exact agreement, those places need to
+**Summary.** Two places where the specification's formulas and the reference's
+code are algebraically identical produce different intermediate values, and
+those differences reach the signature at a rate of about 7.5e-6, at the
+positions where ePrint 2024/1709 turns a discrepant pair into full key
+recovery. They are not the instance of that mechanism which that paper's
+section 6.1 identifies, and its section 7.2 countermeasure does not remove
+them. Two further items concern constants the specification does not let a
+reader derive. If the standard requires bit-exact agreement, all four need to
 be pinned in the text.
 
-### 1. Three algebraically equal, differently rounded formulations
+### 1. Two algebraically equal formulations that the text does not choose between
+
+Two places where the specification's formulas and the reference's code are
+algebraically identical produce different intermediate values, and those
+differences reach the signature.
 
 **(a) Complex division.** The reference computes the reciprocal explicitly:
 
@@ -80,48 +72,50 @@ while the C reference (`Zf(poly_LDL_fft)`) computes
 Three multiplications against one. Equal in exact arithmetic because `G00` is
 Hermitian and therefore real.
 
-**(c) The bottom two levels of ffSampling.** The reference hand-unrolls
-`logn == 2` and folds the split/merge twiddles into the constants `1/sqrt(2)`
-and `1/sqrt(8)`, doing one multiplication where the generic routine does two.
+**These change the signature.** Over 400000 signatures at n = 512 with
+identical key, message and PRNG state, and with every other computation
+including the hand-unrolled bottom levels held at the reference's spelling,
+three diverged — a rate of 7.5e-6 (Poisson 95%: 1.5e-6 to 2.2e-5). When one
+diverges, roughly 470 of its 512 coefficients differ, because the byte stream
+desynchronises.
 
-Our measurements: with every other floating-point primitive already agreeing
-bit for bit (`FFT`, `iFFT`, `poly_split_fft`, `poly_merge_fft`, `poly_add`,
-`poly_sub`, `poly_mul_fft`, `poly_adj_fft`, `poly_muladj_fft`,
-`poly_mulselfadj_fft`, and the whole `B0` matrix of `expand_privkey`), these
-three are what remain. Respelling them makes the expanded private key agree in
-all 5120 doubles at `logn = 9`.
+All three are the mechanism of ePrint 2024/1709 (Lin, Tibouchi, Yu, Zhang,
+EUROCRYPT 2025), Lemma 1:
 
-**They do change the signature, at a measurable rate.** Over 100000
-signatures at n = 512 with identical key, message and PRNG state, five
-diverged -- a rate of 5e-5. When one diverges, roughly 470 of its 512
-coefficients differ, because the byte stream desynchronises.
-
-The mechanism is the one ePrint 2024/1709 identifies. All five divergences are
-nearly-integer centres:
-
-    call 1023   mu = 221.00000000000006   vs   220.99999999999997
-    call 1024   mu = 436.99999999999994   vs   437.00000000000011
-    call 1024   mu = 444.0                vs   443.99999999999977
-    call 1023   mu = -180.99999999999997  vs  -181.0000000000002
-    call 1023   mu =  60.000000000000007  vs   59.999999999999957
+    key 70 sig  534   call 1023 of 1024   mu -267.00000000000006  vs -267
+    key 65 sig 1239   call 1023 of 1024   mu  337                 vs  336.99999999999994
+    key 68 sig 1885   call 1024 of 1024   mu  285.99999999999989  vs  286
 
 `SamplerZ` begins `s = floor(mu)`, and `floor` is discontinuous, so a 1e-13
-discrepancy becomes a difference of 1 in `s`. All five are at call 1023 or
-1024 of 1024 -- positions 2n-2 and 2n-1, which is where that paper predicts
-the centres concentrate near integers.
+discrepancy becomes a difference of 1 in `s`. In all three the leaf standard
+deviation at that node is bit-identical between the two runs, so the
+divergence is carried entirely by the centre. All three are at call 2n-1 or
+2n, which is where section 5 of that paper recovers the entire private key
+from a single discrepant pair.
 
-What we would add to it: 2024/1709 obtains its discrepancies by changing the
-*build* (FMA on or off, emulated against native against AVX2, dynamic against
-tree mode) -- different compilations of the same source. **A different build
-is not required.** Two implementations that both follow the specification
-suffice, because the specification does not say which of two algebraically
-equal formulas to use.
+**Why this is not already covered.** That paper's section 6.1 identifies a
+different instance of the same mechanism — the reference's `sign_dyn` and
+`sign_tree` modes order the bottom two levels of the tree traversal
+differently — and its section 7.2 gives a countermeasure: make `sign_tree`
+follow `sign_dyn`'s ordering. We reproduce that result as a positive control
+(5 in 100000, against the ~3e-5 of its Table 2). But **(a) and (b) above are
+present in both signing modes**, so aligning the two modes with each other
+does not remove them. They are a difference between the specification and the
+reference, not between two entry points of the reference.
 
 **Suggestion.** If FIPS 206 requires bit-exact KAT agreement, the text must
-give these three computations explicitly. We had thought a second option was
-available -- to say that any algebraically equivalent formulation is
-acceptable -- and the measurement removed it: the formulations are not
-interchangeable in the presence of the sampler's `floor`.
+give these two computations explicitly. We had thought a second option was
+available — to say that any algebraically equivalent formulation is acceptable
+— and the measurement removes it: in the presence of the sampler's `floor`,
+algebraically equivalent formulations are not interchangeable.
+
+We would also suggest adopting the countermeasure of that paper's section 7.1
+(sample the centre with `round` rather than `floor`, and require
+`||(g,-f)||^2` odd), which removes the sensitivity itself rather than any one
+instance of it. We note in passing that we reproduce its observation that the
+C reference generates only keys with `||(g,-f)||^2` even, which blocks that
+countermeasure until the key generation's parity condition is relaxed: all 100
+of our independently generated keys are even.
 
 ### 2. `sigma` and `sigma_min` come from different `epsilon`
 
@@ -168,15 +162,20 @@ printed at length rather than a high-precision constant.
 
 **How much this matters.** An implementation that computes the reciprocal
 instead of transcribing the table builds a different expanded private key --
-444 of 512 tree leaves differ at `logn = 9`. Over 100000 signatures, measured
-the same way as section 1 above, it builds the *same signatures*: none of
-51200000 coefficients changed (95% upper bound on the rate, 3e-5).
+452 of 512 tree leaves differ at `logn = 9`. It does not build different
+signatures, and this is settled by theory rather than by our measurement:
+Lemma 2 of ePrint 2024/1709 bounds the probability of a divergent execution by
+160*eps for a perturbation eps of the standard deviation, which at eps ~ 2^-52
+is about 1e-11 per signature. Our 100000-signature run observed none, but its
+resolution is 3e-5, six orders of magnitude too coarse to have seen anything
+either way.
 
-That contrast is the useful part. This constant perturbs the sampler's
-*width*, which enters `BerExp`'s comparison smoothly; section 1's differences
-perturb its *centre*, which passes through `floor`. Whether an
-underdetermined choice reaches the signature depends on which quantity it
-reaches, not on how large it is.
+The contrast with section 1 is still the useful part, and it is the contrast
+between those two lemmas: this constant perturbs the sampler's *width*, which
+enters `BerExp`'s comparison smoothly, while section 1's differences perturb
+its *centre*, which passes through `floor`. Whether an underdetermined choice
+reaches the signature depends on which quantity it reaches, not on how large
+it is.
 
 **Suggestion.** If FIPS 206 keeps a precomputed reciprocal, publish the
 constant itself at full precision rather than leaving it to be derived from a
@@ -215,10 +214,14 @@ applies `bytes.fromhex(oc)[::-1]`).
 - `scripts/first_divergence.jl` — for each divergent pair, the first sampler
   call at which the two disagree, with both centres printed
 - `scripts/inv_sigma_audit.jl` — the ulp table in section 3
-- `docs/debug_log.md` #046, #048, #050, #053, #054 — the measurements behind
-  each claim, including the hypotheses we tested and rejected. #054 records
-  that we asserted the opposite of section 1's conclusion three times on a
-  480-signature sample before measuring at a sample size that could see it.
+- `docs/debug_log.md` #046, #048, #050, #053, #054, #055, #056 — the
+  measurements behind each claim, including the hypotheses we tested and
+  rejected. #054 records that we asserted the opposite of section 1's
+  conclusion three times on a 480-signature sample before measuring at a
+  sample size that could see it; #055 records that our first version of
+  section 1 was a rediscovery of ePrint 2024/1709 section 6.1, because a
+  single toggle we had not read carefully was moving only one of the three
+  formulations we had named.
 
 We would be glad to supply anything further that is useful.
 
@@ -227,13 +230,16 @@ We would be glad to supply anything further that is useful.
 ## 日本語メモ（投稿時には削る）
 
 - 論点は 2024/1709（Sleeping Falcon）と**同じ機構**である。
-  違うのは摂動源で、あちらは**ビルド構成**（FMA の有無、fpemu 対
-  native 対 AVX2）、こちらは**仕様書に忠実な 2 つの実装**。
-  「違うビルドは要らない」が言いたいこと。混同されないよう
-  §1 の最後で明示的に差分を書いてある。
-- §1 と §3 の**対照**が本体。中心（`floor` を通る）は 5e-5 で伝播し、
-  幅（`BerExp` の比較を通る）は 0。「差の大きさ」ではなく
-  「差がどの量に届くか」で決まる、という一文が結論。
+  違うのは摂動源で、あちらは **FMA** と **同一実装の 2 入口**
+  （`sign_dyn`/`sign_tree`）、こちらは**仕様書と参照実装の差**。
+  「違うビルドは要らない」は**誤り**だったので書かないこと
+  （`sign_dyn`/`sign_tree` はビルドの差ではない）。
+  言えるのは「**§7.2 の対策では塞がらない**」の一点。
+  §1 の「Why this is not already covered」がそれ。
+- §1 と §3 の**対照**は書くが、**発見として書かない**。
+  中心（`floor` を通る）は Lemma 1、幅（`BerExp` の比較を通る）は Lemma 2 で、
+  どちらも 2024/1709 が証明済み。こちらの数値はその追認にすぎない。
+  §1 で新しいのは **(a)(b) が両 signing mode に共通で、§7.2 で塞がらない**点だけ。
 - 3 番（`fpr_inv_sigma`）が最も具体的で、最も直しやすく、
   最も「言われないと気づかない」。かつ §1 の対照群として効く。
 - 4 番は round-3 の話なので、FIPS 206 が KAT 形式を変えるなら
