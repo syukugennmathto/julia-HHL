@@ -437,8 +437,14 @@ the loop trip count does depend on the key.
 function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
                       F::Vector{BigInt}, G::Vector{BigInt})
     n = length(f)
-    F = copy(F)
-    G = copy(G)
+
+    # A *deep* copy.  `copy(F)` duplicates the array but not the `BigInt`s in
+    # it, which was fine while the loop rebound `F[i]` to a freshly allocated
+    # result -- and is not fine now that it mutates them in place.  Getting this
+    # wrong would corrupt the caller's `(F, G)` silently.
+    F = BigInt[Base.GMP.MPZ.set!(BigInt(), c) for c in F]
+    G = BigInt[Base.GMP.MPZ.set!(BigInt(), c) for c in G]
+
     size = max(53, maximum(bitsize, f), maximum(bitsize, g))
 
     # Top 53 bits of each coefficient: exactly representable as Float64.
@@ -452,12 +458,23 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
     den_fft = add_fft(mul_fft(fa_fft, adj_fft(fa_fft)),
                       mul_fft(ga_fft, adj_fft(ga_fft)))
 
+    # Scratch reused across iterations.  This loop runs 261 times at n = 128 in
+    # a FALCON-512 key generation, and that one call was 83% of the whole
+    # (docs/debug_log.md #040).
+    Fa = Vector{Float64}(undef, n)
+    Ga = Vector{Float64}(undef, n)
+    tmp = BigInt()
+    acc = BigInt()
+
     while true
         Size = max(53, maximum(bitsize, F), maximum(bitsize, G))
         Size < size && break
 
-        Fa = Float64[Float64(c >> (Size - 53)) for c in F]
-        Ga = Float64[Float64(c >> (Size - 53)) for c in G]
+        sh = Size - 53
+        @inbounds for i in 1:n
+            Base.GMP.MPZ.fdiv_q_2exp!(acc, F[i], sh); Fa[i] = Float64(acc)
+            Base.GMP.MPZ.fdiv_q_2exp!(acc, G[i], sh); Ga[i] = Float64(acc)
+        end
         Fa_fft = fft(Fa)
         Ga_fft = fft(Ga)
 
@@ -470,9 +487,21 @@ function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
         fk = karamul(f, ki)
         gk = karamul(g, ki)
         shift = Size - size
+
+        # `F[i] -= fk[i] << shift` is what this says, and written that way it
+        # was **64% of key generation**: `fk[i]` is about 56 bits and `shift` is
+        # about 6250, so each coefficient allocated a ~790-byte BigInt that is
+        # almost entirely zeros, and then another for the difference.  Two
+        # allocations per coefficient, 256 per iteration, 261 iterations.
+        #
+        # In place, GMP does the same arithmetic into memory that already
+        # exists.  The limb count is unchanged; what goes away is the
+        # allocation and the collector behind it (docs/debug_log.md #040).
         @inbounds for i in 1:n
-            F[i] -= fk[i] << shift
-            G[i] -= gk[i] << shift
+            Base.GMP.MPZ.mul_2exp!(tmp, fk[i], shift)
+            Base.GMP.MPZ.sub!(F[i], tmp)
+            Base.GMP.MPZ.mul_2exp!(tmp, gk[i], shift)
+            Base.GMP.MPZ.sub!(G[i], tmp)
         end
     end
     return (F, G)
