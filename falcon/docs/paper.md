@@ -10,6 +10,34 @@ described in §7 and §9 and will be filled from their output.*
 
 ---
 
+## Abstract
+
+FALCON — standardized by NIST as FN-DSA — is the only selected signature whose
+output is a function of floating-point arithmetic, and its specification's
+precision analysis is about the sampled *distribution*, not about whether two
+conforming implementations produce the same bytes. We write an independent
+implementation in Julia, from the specification, and reconcile it with the C
+reference until it reproduces the reference's signatures **byte for byte**. That
+reconciliation exposes three classes of place where the specification does not
+determine the intermediate values: how an operation is spelled, a constant that
+cannot be derived from the published parameters, and a smoothing parameter that
+is used but not printed. We then measure, over hundreds of thousands of
+signatures with matched controls, which of these reach the signature. Two
+spellings — complex division and the `D11` entry of LDL\* — change the signature
+at ≈ 7.5 × 10⁻⁶ per signature, always at the last two sampler calls, the
+positions where ePrint 2024/1709 (Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025) turns a
+single discrepant pair into full key recovery. Unlike the perturbations that
+paper studies, these are differences between the *specification* and the
+*reference*, present in both of the reference's signing modes, and not removed
+by its countermeasure. We reproduce that paper's mechanism independently and
+check its Heuristic 1 directly (which it does not). Performance: this
+implementation is 20–300× faster than the Python reference, beats the widely
+deployed emulated-floating-point C build on key generation and signing at
+n = 512, and is the fastest of every build we measured at verification, while
+remaining ≈ 6–7× slower than native-floating-point C at signing. Constant-time
+behaviour is explicitly out of scope, for a reason we argue is methodological
+rather than a concession.
+
 ## 要旨 (Japanese abstract)
 
 FALCON（NIST が FN-DSA として標準化する格子署名）の署名は、仕様書が
