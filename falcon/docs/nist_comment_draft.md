@@ -114,23 +114,42 @@ catch, because `sigma_min` only enters as a lower bound.
 ### 3. `fpr_inv_sigma` is not the correctly rounded reciprocal of `sigma`
 
 The reference stores `1/sigma` per degree in `fpr_inv_sigma[]` (`fpr.h`) and
-multiplies the tree leaves by it (`ffLDL_binary_normalize` in `sign.c`,
+multiplies the ffLDL tree leaves by it (`ffLDL_binary_normalize` in `sign.c`:
 "we actually store in the tree leaf the inverse of the value mandated by the
-specification"). Those entries are not `1 / sigma` for the `sigma` printed in
-Table 3.3:
+specification"). We could not reproduce those entries from any derivation the
+specification supports. Computed at 400 bits and compared on raw bit patterns:
 
-| logn | table entry (bits)  | `1/sigma` (bits)    | difference |
-|-----:|:--------------------|:--------------------|-----------:|
-|    9 | `3f78b6c2de64c7ca`  | `3f78b6c2de64c7c9`  |      1 ulp |
-|   10 | `3f78531ef6311ae3`  | `3f78531ef6311ae1`  |      2 ulp |
+| derivation of `1/sigma`                          | logn = 9 | logn = 10 |
+|:-------------------------------------------------|---------:|----------:|
+| correctly rounded reciprocal of Table 3.3's printed sigma | +941 ulp | +18545 ulp |
+| correctly rounded reciprocal of the Float64 sigma the Python reference carries | +1 ulp | +2 ulp |
+| Float64 division `1.0 / sigma`                    |   +1 ulp |    +2 ulp |
+| correctly rounded reciprocal of (2.13) evaluated at 400 bits | +1 ulp | +1 ulp |
+| (2.13) evaluated in Float64, then `1.0 /` it      |   +2 ulp |    +1 ulp |
 
-Presumably the table was derived from a `sigma` with more digits than Table
-3.3 prints. An implementation that computes the reciprocal from the published
-`sigma` therefore does not reproduce the reference's tree.
+The table is above every one of them. The 35-digit decimal in `fpr.h` is also
+not the 35-digit expansion of `1/sigma`: it agrees to about sixteen
+significant figures and then diverges, so it appears to be some Float64
+printed at length rather than a high-precision constant.
+
+**How much this matters.** An implementation that computes the reciprocal
+instead of transcribing the table builds a different expanded private key --
+444 of 512 tree leaves differ at `logn = 9`. It builds the *same signatures*:
+over 120 signatures with identical key, message and PRNG state, none of 61440
+coefficients changed. So this affects a KAT on intermediate values or on the
+expanded-key format, and not a KAT on signatures. We state that limit
+explicitly because the opposite reading would be the alarming one and it is
+not what we measured.
 
 **Suggestion.** If FIPS 206 keeps a precomputed reciprocal, publish the
-constant itself, at full precision, rather than leaving it to be derived from
-a rounded `sigma`.
+constant itself at full precision rather than leaving it to be derived from a
+rounded `sigma`, and say whether intermediate values are within the scope of
+the KAT requirement.
+
+**Related.** `inner.h` line 749 documents `fpr_sigma_min[]` as `1/sigma_min`.
+The array holds `sigma_min` itself (1.2778... at `logn = 9`, which is Table
+3.3's value, not its reciprocal). The code uses it correctly; only the comment
+is wrong.
 
 ### 4. The SamplerZ test vectors' byte-consumption convention
 
