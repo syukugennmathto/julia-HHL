@@ -291,4 +291,83 @@
         end
         @test length(a) == 1
     end
+
+    @testset "this branch's reduction schedule -- what it keeps and what it drops" begin
+        # THIS BRANCH DIVERGES FROM THE SPECIFICATION.  See README.md and
+        # docs/debug_log.md #042.  `babai_reduce` here follows the C reference's
+        # explicit bit-budget schedule instead of the specification's Reduce,
+        # which the Python reference implements and which `main` follows.
+        #
+        # The testset above (`"ntru_solve reproduces the reference exactly"`)
+        # still passes, and that is *not* evidence the two agree in general:
+        # the recorded vectors have f and g of about 8 bits, so `size` is
+        # clamped to 53 in both schedules and they do the same thing.  The
+        # divergence only appears where f and g exceed 53 bits, which happens
+        # at the deep levels of a real n = 512 descent.  This testset pins down
+        # what survives the divergence and what does not.
+
+        rng = MersenneTwister(20260826)
+
+        # 1. The invariant that actually matters is preserved *exactly*.
+        #    Subtracting a multiple of (f, g) cannot change f*G - g*F, whatever
+        #    schedule chose the multiple.
+        for n in (2, 4, 8, 16, 32, 64)
+            for _ in 1:3
+                f = BigInt[rand(rng, -5:5) for _ in 1:n]
+                g = BigInt[rand(rng, -5:5) for _ in 1:n]
+                local F, G
+                try
+                    F, G = ntru_solve(f, g)
+                catch e
+                    e isa NTRUSolveFailure || rethrow()
+                    continue
+                end
+                @test ntru_equation_holds(f, g, F, G)
+                # and the solution is short: within a couple of bytes of (f, g)
+                fg = max(maximum(bitsize, f), maximum(bitsize, g))
+                @test maximum(bitsize, F) <= fg + 16
+                @test maximum(bitsize, G) <= fg + 16
+            end
+        end
+
+        # 2. An all-zero correction is NOT a stopping condition here.  On main
+        #    it is, and that is the whole difference: the loop must be able to
+        #    pass through a scale at which there is nothing to remove and keep
+        #    going at the next one.  Asserted by construction rather than by
+        #    timing: give babai_reduce an (F, G) that is already reduced, and
+        #    it must terminate and leave them alone rather than spin.
+        let n = 8
+            f = BigInt[rand(rng, -5:5) for _ in 1:n]
+            g = BigInt[rand(rng, -5:5) for _ in 1:n]
+            local F, G
+            try
+                F, G = ntru_solve(f, g)
+                Fr, Gr = Falcon.babai_reduce(f, g, F, G)
+                @test ntru_equation_holds(f, g, Fr, Gr)
+                @test maximum(bitsize, Fr) <= maximum(bitsize, F)
+                @test maximum(bitsize, Gr) <= maximum(bitsize, G)
+            catch e
+                e isa NTRUSolveFailure || rethrow()
+            end
+        end
+
+        # 3. Arguments are still not mutated -- the reduction works in place on
+        #    its own deep copies (docs/debug_log.md #040).
+        let n = 16
+            f = BigInt[rand(rng, -4:4) for _ in 1:n]
+            g = BigInt[rand(rng, -4:4) for _ in 1:n]
+            Fp, Gp = try
+                ntru_solve(Falcon.field_norm(f), Falcon.field_norm(g))
+            catch e
+                e isa NTRUSolveFailure ? (nothing, nothing) : rethrow()
+            end
+            if Fp !== nothing
+                Fraw = karamul(lift(Fp), galois_conjugate(g))
+                Graw = karamul(lift(Gp), galois_conjugate(f))
+                sF = copy(Fraw); sG = copy(Graw); sf = copy(f); sg = copy(g)
+                Falcon.babai_reduce(f, g, Fraw, Graw)
+                @test Fraw == sF && Graw == sG && f == sf && g == sg
+            end
+        end
+    end
 end
