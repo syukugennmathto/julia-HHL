@@ -179,7 +179,7 @@ end
     sqnorm(vs...) -> BigInt
 
 Squared Euclidean norm of the concatenation of the given coefficient vectors,
-accumulated in `BigInt`.
+computed **exactly** and returned as a `BigInt` whatever the input type.
 
 Exact arithmetic is not paranoia here: the key-generation rejection test
 compares a Gram-Schmidt norm against `1.17^2 * q`, and the verification test
@@ -187,11 +187,94 @@ compares `||(s1, s2)||^2` against `beta^2`.  Both are *decisions*, so a
 rounding error changes the answer rather than perturbing it.
 
 [Py-ref] scripts/pyref/common.py:38-44 (`sqnorm`)
+
+## Why there are two loops
+
+The obvious implementation -- accumulate straight into a `BigInt` -- was
+measured at **46% of the entire cost of `falcon_verify`** and 14% of signing
+(docs/debug_log.md #033).  That is not because the numbers are big.  In
+verification they are tiny: the coefficients are centred mod `q`, so `|c| <=
+6144`, and the whole sum is under `2^38`.  It is because `BigInt` in Julia is a
+*heap object* wrapping a GMP `mpz_t`.  Every `+` and every `*` allocates, so a
+loop over 2n coefficients allocates 4n times and then pays the collector.
+Measured on values that fit an `Int64` either way, `BigInt` arithmetic is ~315x
+slower than `Int64` and ~40x slower than `Int128`.
+
+So the fast path accumulates in `Int128` with *checked* arithmetic and the slow
+path is kept, unchanged, for anything that does not fit.  The fallback is not
+decoration: `ntrugen.jl` legitimately handles coefficients thousands of bits
+long, and `Int128(c)` on one of those throws `InexactError` before any wrong
+answer can be produced.
+
+## Why the guard is a range test and not checked arithmetic
+
+The first version of this used `Base.Checked.checked_mul`/`checked_add` on the
+`Int128` accumulator, which is the obvious way to be safe.  It gave back only
+3.4x of the 300x, and the reason is worth knowing: **`Int128` has no hardware
+overflow flag**, so Julia's checked operations on it are emulated in software.
+Measured, checked `Int128` arithmetic is ~83x slower than unchecked.  (A
+`try`/`catch` around the loop, the other suspect, costs nothing at all here.)
+
+So the overflow argument is made *once, about the inputs*, instead of on every
+operation.  If every coefficient satisfies `|c| <= 2^40` then each square is at
+most `2^80`, and the sum of fewer than `2^47` of them stays under `2^127`.  Two
+comparisons per coefficient replace two emulated 128-bit checked operations,
+and the bound is checked rather than assumed -- anything outside it takes the
+`BigInt` path and is still exact.
+
+`2^40` is not a tuned number; it is simply far above anything a signature can
+contain (`|c| <= q/2 = 6144`, about `2^12.6`) and far below where the
+accumulator could be troubled.
+
+CONSTANT TIME: the fast path is taken or not depending on the magnitude of the
+coefficients, so the running time depends on the data.  For verification that
+is harmless -- everything here is public -- but the same function is called on
+a *secret* basis during key generation, and there the branch is a leak.  A
+production implementation would fix the width by parameter set and never
+branch.
 """
 function sqnorm(vs::AbstractVector...)
-    acc = BigInt(0)
+    acc = _sqnorm_i128(vs)
+    acc === nothing || return BigInt(acc)
+    # Fallback: exact, unconditional, and the only path for coefficients that
+    # are genuinely large (ntrugen.jl's descent reaches thousands of bits).
+    slow = BigInt(0)
     for v in vs, c in v
-        acc += BigInt(c) * BigInt(c)
+        slow += BigInt(c) * BigInt(c)
+    end
+    return slow
+end
+
+"Largest coefficient magnitude the `Int128` accumulator is proved safe for."
+const _SQNORM_LIM = Int128(1) << 40
+
+"Total number of coefficients the same proof allows (`2^47`), checked so that
+the bound is a fact about this call rather than an assumption about callers."
+const _SQNORM_MAXLEN = 1 << 47
+
+"""
+Sum of squares in `Int128`, or `nothing` if the inputs are outside the range
+that makes the accumulator provably safe.  Split out from [`sqnorm`](@ref) so
+the inner loop is a plain typed loop over one vector.
+"""
+function _sqnorm_i128(vs::Tuple)
+    sum(length, vs; init = 0) < _SQNORM_MAXLEN || return nothing
+    acc = Int128(0)
+    for v in vs
+        a = _sqnorm_i128_one(acc, v)
+        a === nothing && return nothing
+        acc = a
+    end
+    return acc
+end
+
+function _sqnorm_i128_one(acc::Int128, v::AbstractVector)
+    @inbounds for c in v
+        # Compared in the coefficient's own type: a BigInt too wide to convert
+        # fails this test rather than throwing inside the conversion.
+        (-_SQNORM_LIM <= c <= _SQNORM_LIM) || return nothing
+        x = Int128(c)
+        acc += x * x
     end
     return acc
 end

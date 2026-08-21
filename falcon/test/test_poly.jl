@@ -105,6 +105,44 @@
         big = BigInt(2)^40
         @test sqnorm([big, big]) == 2 * big^2
         @test sqnorm([big, big]) isa BigInt
+
+        # --- the Int128 fast path and its fallback (docs/debug_log.md #033) ---
+        #
+        # sqnorm accumulates in Int128 and falls back to BigInt on overflow.
+        # The cases below exist because the test above does NOT reach the
+        # fallback: 2^40 squared twice is 2^81, comfortably inside Int128, so
+        # before these were added the slow path was never executed by the suite
+        # at all and could have been deleted without a single failure.
+
+        # (a) a single coefficient too wide for Int128 -- Int128(c) throws
+        huge = BigInt(2)^200
+        @test sqnorm([huge]) == huge^2
+        @test sqnorm([huge]) isa BigInt
+        @test sqnorm([huge, huge]) == 2 * huge^2
+
+        # (b) coefficients that each fit Int128 but whose *sum of squares* does
+        #     not -- this is the case a naive `Int128(c)`-only guard misses,
+        #     because nothing overflows until the accumulator does
+        near = BigInt(2)^64                     # square is 2^128: overflows Int128
+        @test sqnorm([near]) == near^2
+        many = fill(BigInt(2)^63, 8)            # each square 2^126; 8 of them: 2^129
+        @test sqnorm(many) == 8 * BigInt(2)^126
+
+        # (c) exactly at the boundary: the largest value whose square still fits
+        edge = BigInt(2)^63 - 1
+        @test sqnorm([edge]) == edge^2
+        @test sqnorm([edge]) isa BigInt
+
+        # (d) the two paths must agree wherever both are defined
+        for v in ([0], [-1, 1], [-6144, 6144], [BigInt(2)^40, -BigInt(2)^40])
+            slow = sum(BigInt(c)^2 for c in v)
+            @test sqnorm(v) == slow
+        end
+
+        # (e) negatives, and mixed widths across arguments
+        @test sqnorm([-3, 4]) == 25
+        @test sqnorm([-huge], [1]) == huge^2 + 1
+        @test sqnorm(Int[], [big]) == big^2
     end
 
     @testset "arithmetic mod q (reference vectors)" begin

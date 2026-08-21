@@ -118,13 +118,19 @@ function main(args)
     println("# profile_stages.jl  julia=", VERSION, "  n=", n)
     println()
 
+    # Set FALCON_PROFILE_SKIP_KEYGEN=1 to measure only signing and verification.
+    # One accepted (f, g) is still needed -- there is no signing without a key --
+    # but the repeated ntru_solve timings below are what make this script take
+    # minutes rather than seconds, and once recorded they rarely need redoing.
+    skip_keygen = get(ENV, "FALCON_PROFILE_SKIP_KEYGEN", "0") == "1"
+
     # ---- key generation -----------------------------------------------------
     # gen_poly draws 4096 samplerz values regardless of n, so its cost is
     # constant in n; ntru_solve's is not.  Timing them apart is the whole point.
     src = fresh_source("falcon-jl/profile/keygen", 1 << 22)
 
-    measure!("gen_poly (4096 samplerz draws)", 1, s -> gen_poly(n, bytesource_of(s));
-             iters = 5, setup = src)
+    skip_keygen || measure!("gen_poly (4096 samplerz draws)", 1,
+                            s -> gen_poly(n, bytesource_of(s)); iters = 5, setup = src)
 
     # One accepted (f, g) pair, reused for every stage below.
     f, g = let s = src()
@@ -146,6 +152,7 @@ function main(args)
         (ff, gg)
     end
 
+    if !skip_keygen
     measure!("gs_norm (the quality rejection)", 1,
              _ -> gs_norm(Float64.(f), Float64.(g); q = p.q); iters = 50)
     measure!("is_invertible_zq", 1, _ -> is_invertible_zq(Int.(f)); iters = 50)
@@ -179,6 +186,8 @@ function main(args)
     measure!("karamul on BigInt (again, for contrast)", 2, _ -> karamul(fb, gb); iters = 20)
     measure!("polymul on Int (schoolbook, same ring)", 2, _ -> polymul(fi, gi); iters = 20)
     measure!("polymulq on Int (schoolbook mod q)", 2, _ -> Falcon.polymulq(fi, gi); iters = 20)
+
+    end  # !skip_keygen
 
     F, G = ntru_solve(f, g; q = p.q)
     measure!("expand_privkey (FFT basis + ffLDL tree)", 1,
