@@ -14,16 +14,19 @@
 # and that all five are at sampler call 1023 or 1024 of 1024 -- the LAST TWO
 # calls of the traversal.  None was at call 1 or 2.
 #
-# ePrint 2024/1709 states a "Heuristic 1" (quoted second-hand -- see the
-# provenance note at the bottom):
+# ePrint 2024/1709 section 4.3 states Heuristic 1: with
+# m_k = prod_{i<k} ||b*_{2i}||^2 and g_k = q*m_k for k < n/2, m_{n-k}
+# otherwise, the centres c_{2k} and c_{2k+1} each have probability 1/g_k of
+# being integers.  At the two ends that gives
 #
-#     the first two calls to SamplerZ have probability 1/q of having a
-#     center c_i that is an exact integer, and the last two calls have
-#     probability 1/||(g,-f)||^2 of having such a center.
+#     c_0, c_1           : 1/g_0     = 1/q
+#     c_{2n-2}, c_{2n-1} : 1/g_{n-1} = 1/m_1 = 1/||(g,-f)||^2
 #
-# For Falcon-512, q = 12289 and ||(g,-f)||^2 measures about 16600, so the
+# For Falcon-512, q = 12289 and ||(g,-f)||^2 measures about 16500, so the
 # heuristic predicts 1.63e-4 per signature at the first two calls and
-# 1.20e-4 at the last two.
+# 1.21e-4 at the last two.  Everywhere else g_k is at least of order q^2, and
+# beyond k = 2 (and below k = n-3) it exceeds double precision entirely, so an
+# integer centre could not be detected there even if it occurred.
 #
 # An exact-integer center is NECESSARY for the divergence, not sufficient:
 # the two floating-point evaluations must also land on opposite sides of it.
@@ -61,6 +64,16 @@
 #
 # Both are sized so the heuristic predicts of order ten events.
 #
+# The paper hits the same asymmetry from the other side and leaves it open.
+# Its section 6.1 reports that over 70% of its discrepancies land in the last
+# two calls, and says that "for reasons that we do not fully understand", the
+# probability of a discrepancy conditional on an integer centre is larger
+# there than at the first two -- and that this is specific to the dynamic vs
+# tree difference and absent for FMA.  The determinism recorded here is a
+# candidate mechanism for that, but only a candidate: it explains how many
+# INDEPENDENT draws an experiment gets at each end, which is not the same as
+# the conditional probability they are asking about.  Not resolved here.
+#
 # ===========================================================================
 # HOW A NEAR-INTEGER CENTER IS COUNTED
 # ===========================================================================
@@ -80,15 +93,45 @@
 # rather than a timing difference.
 #
 # ===========================================================================
-# PROVENANCE OF THE HEURISTIC
+# RESULT, AND WHAT IT IS WORTH
 # ===========================================================================
 #
-# eprint.iacr.org, artifacts.iacr.org, dblp.org, link.springer.com and
-# dl.acm.org are all refused by this machine's egress proxy (403 at CONNECT),
-# so Heuristic 1 as stated above has NOT been read in the original; it comes
-# from web-search summaries.  The numbers measured below are ours; what they
-# are compared against is second-hand.  Re-check the statement against the
-# PDF before this is cited anywhere.
+#     100 keys, 100000 draws per arm, n = 512
+#
+#     position (experiment)                near      draws       rate   heuristic
+#     calls 1, 2      (vary message)         17     200000    8.5e-05    8.14e-05
+#     calls 2n-1, 2n  (vary PRNG)            14     200000    7.0e-05    6.08e-05
+#     calls 3 .. 2n-2 (vary PRNG)             0  102000000          0          ~0
+#
+#     ||(g,-f)||^2 over 100 keys: mean 16457, min 15124, max 16820
+#
+# Both ends agree with the heuristic inside Poisson error (17 against an
+# expected 16.3, and 14 against 12.2), and the bulk is empty across 1.02e8
+# draws, as the q^2 denominators require.
+#
+# This is worth recording because the paper measures the CONSEQUENCE of
+# Heuristic 1 -- the rate at which signatures come out different, its Tables 2
+# and 4 -- and not the heuristic itself, which its Remark 1 explains cannot be
+# made a theorem.  Measuring the cause directly, in an implementation written
+# from the specification rather than derived from theirs, is a check nobody
+# had run.
+#
+# One more thing falls out.  Section 7.1 of the paper observes that the C
+# reference generates only keys with ||(g,-f)||^2 EVEN, an idiosyncrasy of
+# that code rather than of the specification, and one that blocks their
+# proposed countermeasure (which needs it odd).  Every one of our 100 keys is
+# even, which confirms it from an implementation that followed the C key
+# generation without knowing this mattered.
+#
+# ===========================================================================
+# PROVENANCE
+# ===========================================================================
+#
+# Heuristic 1 above is transcribed from the paper's page 16, read directly.
+# An earlier revision of this file quoted it from web-search summaries because
+# every IACR, Springer, ACM and dblp host is refused by this machine's egress
+# proxy (403 at CONNECT); the PDF was supplied out of band.  The second-hand
+# statement turned out to be accurate, which was luck rather than method.
 
 using Falcon
 using Printf
@@ -167,6 +210,11 @@ function main()
 
     @printf("||(g,-f)||^2 over %d keys: mean %.1f   min %.0f   max %.0f   (1.17^2 q = %.1f)\n",
             nkeys, mean_normsq, minimum(normsq), maximum(normsq), 1.17^2 * p.q)
+    # Section 7.1 of 2024/1709: the C reference only ever produces even
+    # ||(g,-f)||^2, which blocks the countermeasure it proposes.  Our key
+    # generation follows the C reference, so it should show the same.
+    @printf("  odd: %d of %d   (2024/1709 section 7.1 expects 0 -- the C reference forces it even)\n",
+            count(isodd, Int.(normsq)), nkeys)
     println()
 
     show_determinism(keys[1], point("power analysis message", "power salt"))

@@ -229,12 +229,30 @@ function ldl_fft(G::Matrix{Vector{ComplexF64}})
     # `G01` is recovered as `adj(G[2,1])` rather than read from `G[1,2]`: the
     # conjugate is a sign flip and therefore exact, and this way the routine
     # does not depend on the caller having filled the redundant upper corner.
+    if !LDL_CREF[]
+        # The specification's own spelling, for the ablation.  Algorithm 8 and
+        # ffsampling.py:80-82.  Three multiplications where C does one.
+        L10 = div_fft(G[2, 1], G[1, 1])
+        D11 = sub_fft(G[2, 2], mul_fft(mul_fft(L10, adj_fft(L10)), G[1, 1]))
+        return (L10, D00, D11)
+    end
     G01 = adj_fft(G[2, 1])
     mu = div_fft(G01, G[1, 1])
     L10 = adj_fft(mu)
     D11 = sub_fft(G[2, 2], mul_fft(mu, G[2, 1]))
     return (L10, D00, D11)
 end
+
+"""
+    LDL_CREF
+
+Whether [`ldl_fft`](@ref) computes `D11` the way the C reference does (`true`,
+the default) or the way Algorithm 8 of the specification writes it (`false`).
+
+As with [`CDIV_CREF`](@ref), this exists for the ablation in
+scripts/divergence_rate.jl, not for production use.
+"""
+const LDL_CREF = Ref(true)
 
 """
     ffldl_fft(G) -> FalconTree
@@ -411,6 +429,44 @@ function with_spec_ffsampling(f)
         return f()
     finally
         FFSAMPLING_CREF[] = old
+    end
+end
+
+"""
+    with_spec_spelling(f; cdiv = false, ldl = false, ffsampling = false)
+
+Run `f()` with any subset of the three algebraically-equal-but-differently-
+rounded formulations switched from the C reference's spelling to the
+specification's, restoring all three afterwards.
+
+The three are independent, and the point of separating them is that they are
+not equally novel:
+
+  * `ffsampling` -- the hand-unrolled bottom levels.  This is the SAME
+    difference ePrint 2024/1709 §6.1 identifies between the reference's
+    `sign_dyn` and `sign_tree` modes, down to the folded `1/(2*sqrt(2))`
+    constant, and §7.2 of that paper gives a countermeasure for it.  Measuring
+    it reproduces a published result; it does not establish a new one.
+  * `cdiv`, `ldl` -- complex division and the `D11` entry of LDL*.  These are
+    differences between the specification (with the Python reference) and the C
+    reference, present in BOTH of C's signing modes, and they do not appear in
+    2024/1709.  They perturb the tree's `l10` and its leaf widths, so they
+    reach the sampler's centres by a different route than `ffsampling` does.
+
+So `with_spec_spelling(f; cdiv = true, ldl = true)` -- holding `ffsampling` at
+the C spelling -- is the ablation that decides whether anything here is not
+already 2024/1709 §6.1.  See scripts/divergence_rate.jl.
+"""
+function with_spec_spelling(f; cdiv::Bool = false, ldl::Bool = false,
+                            ffsampling::Bool = false)
+    old = (CDIV_CREF[], LDL_CREF[], FFSAMPLING_CREF[])
+    cdiv && (CDIV_CREF[] = false)
+    ldl && (LDL_CREF[] = false)
+    ffsampling && (FFSAMPLING_CREF[] = false)
+    try
+        return f()
+    finally
+        CDIV_CREF[], LDL_CREF[], FFSAMPLING_CREF[] = old
     end
 end
 

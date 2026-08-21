@@ -351,8 +351,27 @@ raising anything.  In FALCON this matters in exactly one place, the
 is safe precisely because that quantity is bounded away from zero by the
 rejection test.
 """
-div_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64}) =
-    (_checklen(f, g); ComplexF64[_cdiv_cref(f[i], g[i]) for i in eachindex(f)])
+function div_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64})
+    _checklen(f, g)
+    CDIV_CREF[] || return ComplexF64[f[i] / g[i] for i in eachindex(f)]
+    return ComplexF64[_cdiv_cref(f[i], g[i]) for i in eachindex(f)]
+end
+
+"""
+    CDIV_CREF
+
+Whether `div_fft` spells complex division the way the C reference does
+(`true`, the default) or the way the specification's readers do, which is
+their language's own complex division (`false` -- Julia's and Python's are
+both Smith's algorithm).
+
+This exists to be turned off in an experiment, not in production.  See
+[`with_spec_spelling`](@ref) and scripts/divergence_rate.jl.
+
+CONSTANT TIME: out of scope, but note that this is a global `Ref` read on
+every division, which a real implementation would resolve at compile time.
+"""
+const CDIV_CREF = Ref(true)
 
 """
 Complex division **spelled the way the C reference spells it**, so that the
