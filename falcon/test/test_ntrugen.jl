@@ -89,6 +89,51 @@
         @test karamul(BigInt[], BigInt[]) == BigInt[]
     end
 
+    @testset "_negacyclic_addmul! agrees with karamul, in both tiers" begin
+        # THIS BRANCH.  `babai_reduce` no longer calls `karamul` for the
+        # correction: `ki` is a vector of machine integers, so the product is
+        # bignum-times-word and goes through `mpz_addmul_ui` with no
+        # temporaries -- or, when everything fits 62 bits, through a plain
+        # Int64 convolution with no GMP at all (docs/debug_log.md #044).
+        #
+        # Two tiers means two chances to be wrong, so the ranges below are
+        # chosen to cross the boundary in both directions: coefficient widths
+        # from 4 to 200 bits against corrections from 1 to 63 bits.  `karamul`
+        # is the oracle, which is fair -- it is separately checked against the
+        # schoolbook product above.
+        rng = MersenneTwister(20260821)
+        tiers = Set{Bool}()
+        for n in (1, 2, 4, 8, 16, 32), _ in 1:60
+            bits = rand(rng, (4, 20, 60, 200))
+            f = BigInt[rand(rng, big(-2)^bits:big(2)^bits) for _ in 1:n]
+            ki = Int64[rand(rng, 1:3) == 1 ? Int64(0) :
+                       (rand(rng, Int64) >> rand(rng, 1:63)) for _ in 1:n]
+
+            # which tier will this take?  (mirrors the test in the function)
+            kmax = maximum(abs, ki)
+            need = maximum(bitsize, f) + (64 - leading_zeros(kmax)) +
+                   (8 * sizeof(n) - leading_zeros(n))
+            push!(tiers, need <= 62)
+
+            acc = BigInt[BigInt() for _ in 1:n]
+            Falcon._negacyclic_addmul!(acc, f, ki)
+            @test acc == karamul(f, BigInt.(ki))
+        end
+        # The test is worthless if it only ever exercised one tier.
+        @test length(tiers) == 2
+
+        # `acc` is reused across calls, so it must be zeroed, not accumulated.
+        let n = 8
+            f = BigInt[BigInt(i) for i in 1:n]
+            ki = Int64[i == 1 ? Int64(3) : Int64(0) for i in 1:n]
+            acc = BigInt[BigInt(999) for _ in 1:n]
+            Falcon._negacyclic_addmul!(acc, f, ki)
+            @test acc == karamul(f, BigInt.(ki))
+            Falcon._negacyclic_addmul!(acc, f, ki)
+            @test acc == karamul(f, BigInt.(ki))
+        end
+    end
+
     @testset "tower operations against the reference" begin
         for (a, wconj, wnorm, wlift) in TOWER_OPS
             @test galois_conjugate(a) == wconj

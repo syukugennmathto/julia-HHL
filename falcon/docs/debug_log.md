@@ -2520,6 +2520,260 @@ end
 
 ---
 
+## [2026-08-21] #044 分岐版: 降下時間の 55% は BigInt を確保する時間だった
+
+- **ブランチ**: `claude/falcon-julia-fndsa-hl8i54-cschedule`
+- **モジュール**: ntrugen.jl
+- **症状**: バグではない。`gen_poly_cdt` を直した（#043）結果、
+  `ntru_solve` が鍵生成の 81% になった。その内訳を測った。
+- **再現条件**: `n=512`。
+
+### 切り分け
+
+- [x] 段ごとの内訳（`scripts/profile_ntrusolve.jl`）:
+      `babai_reduce` が降下 15.97 ms のうち **12.26 ms**（77%）。
+- [x] `Profile` の flat 出力を self 時間で並べ替えた:
+
+      2686 self  @Base/gmp.jl:64   BigInt(; nbits::Int64)
+      1395 self  @Base/gmp.jl:151  init2!
+      1020 self  @Base/boot.jl:579 Array
+       692 self  @Base/boot.jl:516 GenericMemory
+
+      **合計 5793 / 7344 サンプル = 79% が「確保」そのもの。**
+      演算ではない。
+- [→] 誰が確保しているか。`babai_reduce` の内側:
+      1. `ki = Vector{BigInt}(undef, n)` ― 毎パス n 個の GMP オブジェクト
+      2. `karamul(f, ki)` ― Karatsuba の再帰が `SubArray` と一時 `BigInt` の
+         木を作る
+      3. `fk[i] * 2^scale_k` と `F[i] - ...` ― 積と差でそれぞれ 1 個
+
+### 外した仮説
+
+1. 「深い段の係数が数千 bit あるから、GMP の**乗算そのもの**が重い」。
+   違う。乗算は self 時間に出てこない。重いのは `init2!`（GMP の確保）である。
+2. 「`karamul` を全部 `_negacyclic_addmul!` に置き換えれば全段速くなる」。
+   **これは実装して測って外した。** 最上段（n=512、`f` が 8 bit）で
+   **1.16 ms → 7.79 ms の 6.7 倍の劣化**。
+   理由は `karamul` の機械語ワード fast path で、
+   8 bit × 25 bit × 512 項 = 42 bit なので**畳み込み全体が Int64 で回る**。
+   そこに `mpz_addmul_ui` を持ち込むと、`imul` + `add` がライブラリ呼び出しになる。
+3. 「`ki` を `Int64` にすれば速くなる」。効果はあるが**1.03 倍しかない**
+   （下の A/B）。箱と同じで、もっともらしい方の犯人は小さかった。
+
+### 原因
+
+`karamul(f, ki)` は「大きい係数 × 大きい係数」用の道具である。
+Babai の補正では **`ki` は 64 bit の機械語整数**なので、
+部分積はすべて「多倍長 × ワード」であり、これは GMP の
+`mpz_addmul_ui`（`r += a*b` をその場で、一時変数なしに）そのものである。
+`Base.GMP.MPZ` は `addmul`/`submul` を wrap していないので `ccall` で呼ぶ。
+
+**これは Pornin–Prest 論文 §5.4 が名指しで挙げている 2 択の 1 番目である**
+（`docs/refs.md`）:
+
+> The computation of `kf` and `kg` is the most expensive part of the reduction.
+> We have the choice between two methods:
+> 1. Use a plain quadratic algorithm: if the degree is `d`, we thus need `d²`
+>    multiplications of a big integer (a coefficient of `f` or `g`) by a small
+>    integer (a coefficient of `k`).
+> 2. Use the RNS representation and the NTT ...
+
+そして同じ節が「閾値で切り替えよ、閾値は実装とハードに強く依存するので
+**測れ**」と書いている。こちらの閾値は論文とは軸が違う
+（論文は「多倍長 vs RNS+NTT」、こちらは「Int64 vs 多倍長」）が、
+**測って決めろ**という結論は同じである。
+
+### 修正
+
+`_negacyclic_addmul!(acc, f, ki, fbits)` を新設。
+`karamul` と**同じ幅判定**を行い、
+
+- `need <= 62` → `Int64` の schoolbook（GMP に一切触らない）
+- それ以外 → `mpz_addmul_ui` / `mpz_submul_ui` でその場累算
+
+`ki` は `Vector{Int64}` にし、`ki[l] == 0` の外側ループはスキップする
+（補正は疎である）。`acc` は `babai_reduce` の呼び出し間で使い回す。
+
+段ごとの `babai` 時間（ms、同一 (f,g)）:
+
+| n | 変更前 | GMP 一本 | **両段構え** |
+|---:|---:|---:|---:|
+| 512 | 1.16 | 7.79 | **0.95** |
+| 256 | 0.70 | 3.24 | **0.45** |
+| 128 | 0.47 | 1.54 | **0.48** |
+| 64 | 0.41 | 0.71 | **0.81** |
+| 32 | 3.82 | 0.39 | **0.44** |
+| 16 | 2.36 | 0.23 | **0.29** |
+| 8 | 1.71 | 0.22 | **0.19** |
+| 4 | 1.00 | 0.14 | **0.15** |
+| 2 | 0.65 | 0.16 | **0.15** |
+| **計** | **12.26** | 14.42 | **3.90** |
+
+降下全体 17.4 → 9.1 ms、`ntru_gen` 中央値 34.30 → **19.81 ms**。
+
+ついでに C のスケジュールの `-25` を `BABAI_STEP` として名前を与え、
+`babai_reduce` / `ntru_solve` のキーワードから振れるようにして掃引した
+（12 鍵、同一入力）:
+
+| step | 1 回の求解 | `NTRUSolveFailure` |
+|---:|---:|---:|
+| 25 | 19.3 ms | 2/12 |
+| 31 | 15.0 ms | 3/12 |
+| 40 | 11.3 ms | 7/12 |
+| 45 以上 | ― | 12/12 |
+
+**速くなるが再標本が増えるので割に合わない**（step 40 は期待値で 27 ms）。
+25 のままにした。論文 §5.4 の「k の係数が 30 bit に収まるように」と整合する。
+
+### 回帰テスト
+
+- `test_ntrugen.jl`: `_negacyclic_addmul!` が**両方の段で** `karamul` と
+  一致すること（n = 1..32、係数 4/20/60/200 bit、`ki` に 1/3 の確率で 0、
+  `ki` の大きさを 1〜63 bit で振る = 両方の段を必ず通る）。
+- スイート全体合格。
+
+### 学び
+
+1. **プロファイラは cumulative ではなく self で並べ替えて読む。**
+   cumulative で見ていたら `babai_reduce` としか分からなかった。
+   self で見たら `init2!` が出てきて、それは GMP の `malloc` である。
+2. **「速くする」変更が、ある入力で 6.7 倍遅くする。**
+   深い段だけ見て commit していたら、鍵生成は遅くなっていた。
+   **全段で測る。** 段ごとの表を出す道具（`profile_ntrusolve.jl`）を
+   先に作っておいたのが効いた。
+3. **論文は後から読んでも遅くない、が、先に読めば 1 手減った。**
+   `mpz_addmul_ui` にたどり着いたのは profile からだが、
+   §5.4 は同じ選択肢を名指しで並べている（#045 参照）。
+
+---
+
+## [2026-08-21] #045 一次資料が届いた ― そして「参照実装の既定は FPEMU」は誤りだった
+
+- **モジュール**: docs（`README.md` / `docs/benchmarks.md`）、`scripts/cref/`
+- **症状**: ユーザから **Falcon 参照実装の公式アーカイブ**
+  （`Falcon-impl-20211101.zip`）と
+  **Pornin–Prest, "More Efficient Algorithms for the NTRU Key Generation
+  using the Field Norm"**（IACR ePrint 2019/015）が届いた。
+  #002 以来「一次資料に到達できない」という前提で作業していたので、
+  **これまでに書いた一次資料に関する主張を全部検算する必要がある**。
+- **再現条件**: —
+
+### 切り分け
+
+- [x] **アルゴリズムのファイルは全部バイト一致だった。**
+      これまで `[C-ref]` の引用元にしていた algorand/falcon ミラーと
+      公式アーカイブを全ファイル差分:
+
+      keygen.c fft.c fpr.c sign.c codec.c common.c rng.c shake.c fpr.h : 0 行
+      vrfy.c   : 13 行（Algorand が mq_NTT 等を export しただけ）
+      inner.h  : 31 行（同上の宣言）
+      config.h : 143 行  ← ここだけ意味がある
+
+      **したがって既存の `[C-ref] keygen.c:1234` 形式の引用は
+      公式アーカイブに対してもそのまま有効。**
+- [→] `config.h` を読んだ。Algorand は `FALCON_FPEMU 1` を**有効にしている**。
+      その理由（決定的署名、非決定性は「CATASTROPHIC SECURITY FAILURE」）も
+      Algorand の `config.h` に書いてある。
+      **公式アーカイブの `config.h` は FPEMU も FPNATIVE も両方コメントアウト。**
+      `README.txt` にはこうある:
+
+      > If using FALCON_FPNATIVE, then the C 'double' type is used for all
+      > floating-point operations. **This is the default.**
+
+- [x] 公式ツリーを無改変でビルドして確認 →
+      `# cref_bench fpemu=0 fpnative=1`。**ネイティブ FP で動く。**
+
+### 外した仮説
+
+**これは仮説ではなく、こちらが書いてしまった誤りである。**
+
+`README.md` と `docs/benchmarks.md` にこう書いていた:
+
+> 参照実装が**実際に配布するのは FPEMU 版**であり、
+> ネイティブ FP は「署名の非決定性は壊滅的」として使うなと書かれている。
+
+**両方とも Algorand のフォークの話で、Falcon 参照実装の話ではない。**
+ミラーを参照実装だと思って読み、フォークが加えた方針を
+原典の方針として引用した。ミラーが**アルゴリズムについては**
+バイト一致だったことが、かえってこの取り違えを見えなくした。
+
+### 原因
+
+「ミラー」を「同一物」として扱った。
+アルゴリズムは同一だったが、**ビルド構成は同一ではなかった**。
+そして速度対決で「どちらが公平な相手か」を決めていたのは
+まさにそのビルド構成である。
+
+### 修正
+
+1. 公式アーカイブを `scripts/cref/` に vendor（MIT）。
+   経緯と差分は `scripts/cref/PROVENANCE.md`。
+2. `docs/refs.md` を新設し、一次資料の所在と、
+   どの主張がどれに拠っているかを一覧にした。
+3. `README.md` / `docs/benchmarks.md` の当該記述を訂正。
+   **速度対決の主たる相手をネイティブ FP 版に変更した。**
+   FPEMU 版の数字も残す（Algorand が配るのはそちらなので、
+   「実際に使われている実装」との比較としては意味がある）。
+
+同一マシン・同一時刻で測り直した C の中央値（`n=512`、40/200/200 回）:
+
+| build | keygen | sign_tree | verify |
+|:---|---:|---:|---:|
+| 公式アーカイブ、無改変（= native FP） | 5.928 | 0.172 | 0.0264 |
+| Algorand ミラー（= FPEMU） | 12.266 | 1.812 | 0.0263 |
+| Algorand ミラー、native 強制 | 5.764 | 0.173 | 0.0263 |
+
+**`verify` は 3 ビルドとも同じ**（浮動小数点を使わないので当然）。
+我々の `verify` が C に勝っている（0.0152 ms、**1.74 倍**）という
+#039 の結論は、**どのビルドを相手にしても変わらない**。
+
+### 論文の方は、こちらの設計を追認していた
+
+`docs/math/06_ntrugen.md` 6.9b と #041/#042/#044 で
+「仕様書の `Reduce` と C の bit 予算方式は別のアルゴリズムだ」と書いた。
+論文 §5.4 を読むと、**両方とも論文にある**:
+
+- **Algorithm 1 (`Reduce`)** が理想版。`k ← ⌊(Ff*+Gg*)/(ff*+gg*)⌉`、
+  `k ≠ 0` である限り回す。仕様書と Python 参照実装はこれ。
+- **§5.4** が実装版。
+  > we extract the high bits of f, g, F and G and compute k with the FFT and
+  > a scaling factor, such that the resulting coefficients for k are equal to
+  > **small integers (that fit on 30 bits each) multiplied by 2^s**
+
+  これがこのブランチ（と C）の明示的 bit 予算そのものである。
+
+さらに §2.8 は Algorithm 1 の停止条件についてこう書いている:
+
+> Of course, using floating-point arithmetic means that one could be stuck in
+> an infinite loop, but this is easily thwarted by **exiting the algorithm as
+> soon as the norm of (F, G) stops decreasing**.
+
+**つまり「k が 0 になったら止める」は仕様書側の具体化であって、
+論文が要求している停止条件ではない。**
+このブランチは仕様書から逸脱しているが、**論文からは逸脱していない**。
+`README.md` の ⚠ バナーはこの区別を書くように直した。
+
+### 回帰テスト
+
+なし（ドキュメントの訂正）。ただし `scripts/cref/` が入ったので、
+C 側のベンチマークは**リポジトリの中身だけで再現できる**ようになった。
+
+### 学び
+
+1. **ミラーは同一物ではない。** 「round-3 参照実装のミラー」と
+   README に書いておきながら、それが何のミラーで何が違うかを確認していなかった。
+   アルゴリズムが一致していたことが確認の代わりになると思っていた。
+   **ビルド構成も一次資料の一部である。**
+2. **一次資料が無い間に書いた主張には印を付けておくべきだった。**
+   `spec_ref = "TODO"` は付けていたが、
+   「参照実装の既定は FPEMU」の方には何も付いていなかった。
+   **不確かさの記録は、値だけでなく文にも要る。**
+3. 一方で、**測定から到達した設計判断は論文と一致していた**（#044）。
+   一次資料が無いことは言い訳にならないが、
+   「測って決める」は一次資料が無いときの正しい代替ではあった。
+
+---
+
 ## 完了時点のまとめ
 
 モジュール 1〜10 すべて実装・テスト合格（**17926 件**、実行約 2 分）。

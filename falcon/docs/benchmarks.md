@@ -46,6 +46,126 @@ GC は止めていない ― 割り当てはこの実装の実コストであり
 展開済み鍵を取るので、**対応するのは `sign_tree`**。
 `sign_dyn` と比べると木の構築コスト分だけ我々に下駄を履かせることになる。
 
+## 【このブランチ・2026-08-21】現在の総合結果
+
+> **以下の「現在の総合結果」以降の節は `main` ブランチの記録であり、
+> かつ「参照実装の既定は FPEMU」という誤った前提で書かれている。**
+> 訂正は `docs/debug_log.md` #045。歴史として残すが、
+> **現在の数字はこの節を見ること。**
+
+測定環境（前節とは**別のマシン**である。数字を跨いで比較しないこと）:
+
+| | |
+|:---|:---|
+| CPU | Intel Xeon @ 2.10GHz、4 コア（コンテナ内） |
+| Julia | 1.11.9（`docs/debug_log.md` #013 の手順で入手） |
+| C | **公式アーカイブ `Falcon-impl-20211101`**（`scripts/cref/`）、`cc -O2` |
+| 反復 | keygen 40 / sign 200 / verify 200〜400 |
+
+C 側は 3 通りビルドした。**無改変ビルドがネイティブ FP になる**のが要点:
+
+| build | keygen | sign_tree | verify |
+|:---|---:|---:|---:|
+| 公式、無改変（`fpemu=0 fpnative=1`） | **5.928** | **0.172** | 0.0264 |
+| Algorand ミラー（`config.h` が FPEMU を強制） | 12.266 | 1.812 | 0.0263 |
+| Algorand ミラー、native 強制 | 5.764 | 0.173 | 0.0263 |
+
+Julia 側（このブランチ、`scripts/bench.jl 9 40 200 400`）:
+
+| op | median | mean | min |
+|:---|---:|---:|---:|
+| `keygen` | **17.122** | 28.862 | 10.457 |
+| `expand_privkey` | 0.842 | 1.919 | 0.509 |
+| `sign_tree` | **1.105** | 1.409 | 0.916 |
+| `verify` | **0.0167** | 0.0272 | 0.0149 |
+
+並べると:
+
+| op | C（既定 = native） | C（FPEMU） | **Julia** | Julia / C(既定) |
+|:---|---:|---:|---:|---:|
+| `keygen` | 5.928 | 12.266 | **17.122** | 2.9x 遅い |
+| `sign`（展開済み鍵） | 0.172 | 1.812 | **1.105** | 6.4x 遅い |
+| `verify` | 0.0264 | 0.0263 | **0.0167** | **1.58x 速い** |
+
+### 3 つ合わせると
+
+**(a) 1 回ずつ**（鍵 1 個・署名 1 通・検証 1 通）
+
+| | 合計 ms |
+|:---|---:|
+| C（既定 = native） | 6.12 |
+| C（FPEMU） | 14.10 |
+| **Julia** | **18.24** |
+
+C(既定) の **3.0 倍**。合計の **93.9% が `keygen`**。
+`main` の 134.30 ms・「C の 9.6 倍」からは大きく動いた。
+
+**(b) 定常運用**（鍵 1 個で N 通）
+
+    Julia          = 17.96 + 1.122 N
+    C (既定/native) =  6.00 + 0.199 N
+    C (FPEMU)      = 12.29 + 1.838 N
+
+- **C(FPEMU) には N ≈ 8 で逆転する**（傾きでも勝っているので以後ずっと勝ち）。
+- **C(既定/native) には永久に追いつかない**。傾きで 5.6 倍負けている。
+
+**(c) 検証だけ**: どの C ビルドにも勝っている（1.58 倍）。
+
+### どの C と比べるのが公平か（#045 で訂正）
+
+**参照実装が既定でビルドするのはネイティブ FP 版である。**
+公式アーカイブの `config.h` は `FALCON_FPEMU` も `FALCON_FPNATIVE` も
+コメントアウトしたままで、`README.txt` が
+
+> If using FALCON_FPNATIVE, then the C 'double' type is used for all
+> floating-point operations. **This is the default.**
+
+と書いている。無改変ビルドは実際に `fpemu=0 fpnative=1` になる（確認済み）。
+
+FPEMU を既定にし
+「*** CRITICAL SECURITY WARNING *** 非決定的署名は CATASTROPHIC」と
+書いているのは **Algorand のフォーク**であって、参照実装ではない。
+このファイルの以前の版はそれを取り違えていた。
+
+したがって:
+
+- **主たる相手は native FP ビルド**である。`keygen` 2.9 倍、`sign` 6.4 倍の負け。
+- FPEMU ビルドとの比較も意味はある ―
+  **Algorand が実際に配って使っているのはそちら**だからで、
+  「現に動いている Falcon 実装との比較」としては有効である。
+- **`verify` は 3 ビルドとも同じ値**なので、この留保はかからない。
+  勝ちはビルド構成に依らない。
+
+なお我々は依然としてハードウェアの `double` を使っており、
+**署名の bit 再現性という保証を持っていない**（#031）。
+その点では native FP ビルドと同じ立場であって、FPEMU とは違う。
+**その意味でも、比較すべき相手は native の方である。**
+
+### 鍵生成の推移（このブランチ）
+
+| 状態 | median | 出典 |
+|:---|---:|:---|
+| 最初 | 9610 ms | #032 |
+| `bitsize` / 混成 `karamul` / in-place GMP | 133 ms | #040 |
+| C の縮約スケジュール | 60 ms | #042 |
+| CDT サンプラ + `Core.Box` 除去 | 34.3 ms（`ntru_gen`） | #043 |
+| Babai の補正を `mpz_addmul_ui` に融合 | **17.1 ms** | #044 |
+
+### 再現
+
+```sh
+# C 側（リポジトリの中身だけで完結する）
+cd falcon/scripts/cref
+cc -O2 -o /tmp/cref_bench ../cref_bench.c \
+   codec.c common.c falcon.c fft.c fpr.c keygen.c rng.c shake.c sign.c vrfy.c -lm
+/tmp/cref_bench 9 40 200 200
+
+# Julia 側
+julia --project=falcon falcon/scripts/bench.jl 9 40 200 400
+```
+
+---
+
 ## FALCON-512 ― 現在の総合結果
 
 **同一マシン・同一時刻の 1 セッションで測り直した中央値（ms）。**

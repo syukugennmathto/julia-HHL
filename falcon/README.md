@@ -1,19 +1,30 @@
-> ## ⚠ このブランチは仕様から意図的に逸脱している
+> ## ⚠ このブランチは**仕様書**から意図的に逸脱している（**論文**からは逸脱していない）
 >
 > **ブランチ**: `claude/falcon-julia-fndsa-hl8i54-cschedule`
 > **分岐元**: `claude/falcon-julia-fndsa-hl8i54`（`f66c301`）
 >
-> `babai_reduce` を、仕様書（および Python 参照実装）の `Reduce` ではなく
-> **C 参照実装の明示的 bit 予算方式**に置き換えてある。
-> 詳細は `docs/debug_log.md` #041 / #042、`docs/math/06_ntrugen.md` 6.9b。
+> 二点で `main` と違う:
+>
+> 1. `babai_reduce` が、仕様書（および Python 参照実装）の `Reduce` ではなく
+>    **明示的 bit 予算方式**である。
+> 2. `f, g` の標本化が、`samplerz` の畳み込みではなく
+>    **C 参照実装の CDT 表**である（`gen_poly_cdt`）。
+>
+> どちらも C 参照実装の方式で、**どちらも Pornin–Prest 論文に書かれている**。
+> 論文 §2.8 は `Reduce` の停止条件について
+> 「(F, G) のノルムが減らなくなった時点で抜ければよい」と書いており、
+> 「`k` が 0 になったら止める」は**仕様書側の具体化**にすぎない。
+> §5.4 は「`k` の係数が 30 bit の整数 × 2^s になるようスケールする」と
+> 明記していて、それがこのブランチの `BABAI_STEP` である。
+> 出典の対応表は `docs/refs.md`、経緯は `docs/debug_log.md` #041〜#045。
 >
 > | | main | このブランチ |
 > |:---|:---|:---|
-> | `Reduce` の出典 | 仕様書 / Python 参照実装 | C 参照実装 |
+> | `Reduce` の出典 | 仕様書 / Python 参照実装 | 論文 §5.4 / C 参照実装 |
+> | `f, g` の標本化 | 仕様書（`samplerz` の畳み込み） | C 参照実装（CDT 表） |
 > | `(F, G)` | **Python 参照実装と厳密一致** | 一致しない（別の有効解） |
 > | `f*G − g*F = q` | 成立 | **成立**（厳密に保存される） |
-> | 降下 | 約 200 ms | **約 18 ms（10.5 倍）** |
-> | `keygen` 中央値 | 約 129 ms | **約 60 ms（2.1 倍）** |
+> | `keygen` 中央値 | 約 129 ms | **約 20 ms** |
 >
 > **Babai 縮約は一意ではない**ので、どちらも正しい短基底を返すが
 > 同じものは返さない。仕様準拠を上位に置くなら `main` を、
@@ -78,42 +89,43 @@ FALCON_SKIP_1024=1 julia --project=falcon -e 'using Pkg; Pkg.test()'
 
 ## 速度対決（C 参照実装 vs Julia）
 
-数値と再現手順は `docs/benchmarks.md`。同一時刻・同一マシンの中央値（ms）:
+数値と再現手順は `docs/benchmarks.md`。**このブランチ**の数字である。
+同一マシン（Xeon 2.10GHz、4 コア）・同一時刻の中央値（ms、`n=512`）:
 
-| op (n=512) | C (FPEMU, 参照実装の既定) | C (native FP) | **Julia** |
+| op (n=512) | **C 参照実装（既定 = native FP）** | C（FPEMU、Algorand が配る形） | **Julia** |
 |:---|---:|---:|---:|
-| `keygen` | 10.881 | 5.146 | **132.671** |
-| `sign`（展開済み鍵） | 1.566 | 0.146 | **1.155** |
-| `verify`（バイトから） | 0.0204 | 0.0204 | **0.0148** |
+| `keygen` | 5.928 | 12.266 | **17.122** |
+| `sign`（展開済み鍵） | 0.172 | 1.812 | **1.105** |
+| `verify`（バイトから） | 0.0264 | 0.0263 | **0.0167** |
 
-**`verify` はどの C ビルドにも勝っている**（1.13〜1.39 倍）。
-`verify` は浮動小数点を使わないので C の 2 ビルドが同じ値になり、
-**この勝ちは FPEMU のハンデに依らない**（#039）。
+- **`verify` はどの C ビルドにも勝っている**（1.58 倍）。
+  `verify` は浮動小数点を使わないので C の 3 ビルドが同じ値になり、
+  **この勝ちはビルド構成に依らない**（#039）。
+- **`sign` は FPEMU ビルドに勝ち、native ビルドには 6.4 倍負けている。**
+- **`keygen` は native の 2.9 倍、FPEMU の 1.4 倍。**
 
-**3 つ合わせると**:
+> **どちらの C が「参照実装の既定」か**は #045 で訂正した。
+> 公式アーカイブは `FALCON_FPEMU` も `FALCON_FPNATIVE` も
+> コメントアウトしたまま配っており、`README.txt` は
+> "If using FALCON_FPNATIVE ... **This is the default.**" と書いている。
+> 無改変ビルドは実際に native FP になる（確認済み）。
+> FPEMU を既定にしているのは **Algorand のフォーク**であって参照実装ではない。
+> 初版の README はこれを取り違えていた。
 
-- **1 回ずつ**（鍵 1 個・署名 1 通・検証 1 通）: 合計 134.3 ms 対 C(既定) 13.9 ms
-  ― **9.6 倍遅い**。そして**我々の合計の 98.8% は `keygen`**。
-- **定常運用**（鍵 1 個で N 通）: `Julia = 133.13 + 1.170N`、
-  `C(既定) = 12.34 + 1.586N` ― **N ≈ 290 で逆転**。
-- **検証だけ**: 勝っている。
+### 鍵生成の推移
 
-C の native FP 版とは署名の傾きで負けているので追いつかない。
-ただし参照実装が**実際に配布するのは FPEMU 版**であり、
-ネイティブ FP は「署名の非決定性は壊滅的」として使うなと書かれている。
-我々はその 1 桁を払っていない代わりに、その保証も持っていない（#031）。
+このブランチで踏んだ道:
 
-### 鍵生成が唯一の負け筋
+| 状態 | `keygen` 中央値 | 出典 |
+|:---|---:|:---|
+| 最初 | 9610 ms | #032 |
+| `bitsize` / 混成 `karamul` / in-place GMP | 133 ms | #040 |
+| C の縮約スケジュール（明示的 bit 予算） | 60 ms | #042 |
+| C の CDT サンプラ | ― | #043 |
+| サンプラの `Core.Box` を外す | ― | #043 |
+| Babai の補正を `mpz_addmul_ui` に融合 | **17 ms** | #044 |
 
-9610 → **133 ms**（72 倍改善）。それでも C の 12 倍。
-理由は表現でも RNS でもなく、**Babai 縮約のスケジュール**だった ―
-`size = max(53, bits(f,g))` の `53` のクランプにより、
-深い段では補正 `k` が 0 に丸まって縮約が降参し、
-6240 bit の係数がそのまま運ばれる。C は明示的な bit 予算を持つので降参しない。
-仕事量にして **71 倍**の差（`docs/debug_log.md` #041、`docs/math/06_ntrugen.md` 6.9b）。
-
-**参照実装が 2 つあり、この一点で違うアルゴリズムを実装している。**
-仕様書の `Reduce` は Python 側の形で、我々はそちらに忠実である。
+**565 倍**改善して、C の既定ビルドの 2.9 倍まで来ている。
 
 ## golden vector の再生成
 
@@ -139,9 +151,12 @@ scripts/
   cref_bench.c      C 参照実装の速度を測るドライバ
   bench.jl          こちらの速度を同じ形式で測るスクリプト
   bench_compare.jl  両者を並べて表にする
+  cref/             **C 参照実装の公式アーカイブ**（Falcon-impl-20211101, MIT）
+                    経緯と algorand ミラーとの差分は cref/PROVENANCE.md
   pyref/            Python 参照実装 (tprest/falcon.py, MIT) を vendor したもの
 docs/
   debug_log.md          デバッグ記録（セッションをまたぐ唯一の記憶）
+  refs.md               **一次資料の所在と、どの主張がどれに拠るかの対応表**
   build_cref_macos.md   C 参照実装を dylib にする手順（macOS / Apple Silicon）
   benchmarks.md         C 版との速度対決の生データと再現手順
   math/                 数学的背景（原稿素材）
@@ -157,8 +172,13 @@ julialang.org 系のドメインが塞がれている環境でも、Docker Hub �
 
 | | 用途 | 出所 |
 |:---|:---|:---|
-| C | 主たる突き合わせ相手（`ccall`） | <https://github.com/algorand/falcon>（round-3 参照実装のミラー、MIT） |
+| C | 主たる突き合わせ相手（`ccall`）・速度対決 | **公式アーカイブ `Falcon-impl-20211101.zip`**（MIT）。`scripts/cref/` に vendor。`scripts/cref/PROVENANCE.md` |
 | Python | 副の突き合わせ相手・golden vector 生成 | <https://github.com/tprest/falcon.py>（MIT, Thomas Prest）。`scripts/pyref/` に vendor（`LICENSE` 同梱） |
+| 論文 | 降下アルゴリズムの一次資料 | Pornin, Prest, IACR ePrint **2019/015**。本文は vendor せず節番号で引用（`docs/refs.md`） |
+
+#045 以前は algorand/falcon ミラーを引用元にしていた。
+**アルゴリズムのファイルはすべてバイト一致**なので既存の `[C-ref]` 引用は
+そのまま有効だが、`config.h` だけは違っていて、そこを取り違えていた。
 
 C 実装のビルドは `docs/build_cref_macos.md`。
 `Zf(name)` が `falcon_inner_name` に展開されること、`fpr` が
@@ -169,8 +189,12 @@ C 実装のビルドは `docs/build_cref_macos.md`。
 パラメータは記憶や推測で書かない方針。各定数には実際に読んだ file:line を
 `[C-ref]` / `[Py-ref]` タグで付けてある。
 
-ただし**仕様書 PDF そのものには到達できていない**（実行環境の egress ポリシーが
-falcon-sign.info / nvlpubs.nist.gov / eprint.iacr.org をすべて遮断している。
-`docs/debug_log.md` #002）。したがって「仕様書の表番号」は埋まっておらず、
+**仕様書 PDF そのものには依然として到達できていない。**
+2026-08-21 に C 参照実装の公式アーカイブと Pornin–Prest 論文は入手できたが
+（`docs/refs.md`）、提出パッケージ同梱の `falcon.pdf` はまだ無い。
+実行環境の egress ポリシーが falcon-sign.info / nvlpubs.nist.gov /
+eprint.iacr.org をすべて遮断している（`docs/debug_log.md` #002）。
+したがって「仕様書の表番号」は埋まっておらず、
 `FalconParams.spec_ref` は `"TODO: ..."` のまま残してある。
 値そのものは C と Python の 2 実装が完全一致していることで担保している。
+**「値が疑わしい」のではなく「出典が書けていない」**という意味の TODO である。
