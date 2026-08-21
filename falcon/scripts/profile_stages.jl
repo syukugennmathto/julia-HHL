@@ -32,6 +32,17 @@
 #     stage is not slow -- allocation somewhere is, and the collector merely
 #     presented the bill to whoever was running at the time.
 #
+#   - **The collector is NOT forced before each timed call.**  An earlier
+#     version called `GC.gc(false)` there, reasoning that each run should start
+#     from a comparable heap.  It does -- and it also moves the collection an
+#     allocation-heavy stage would have triggered *outside* the timed region,
+#     so that stage is billed for its allocation but not for its collection.
+#     Measured, that understated signing by 42% (1.745 ms reported as 1.012)
+#     and verification by 18%.  Every gc% of 0.0 in the old output was an
+#     artefact of the method (docs/debug_log.md #035).  Set
+#     FALCON_PROFILE_FORCE_GC=1 to get the old behaviour back for comparison;
+#     the honest number is the default.
+#
 #   - Stages that consume randomness are given a *fresh, identical* byte source
 #     each time, so run k and run k+1 do the same work.  Without that, a
 #     rejection-sampling stage would drift into different amounts of work as
@@ -53,6 +64,7 @@ struct Row
     label::String
     depth::Int
     ms::Float64
+    mean_ms::Float64
     alloc_mb::Float64
     gc_pct::Float64
     n::Int
@@ -61,50 +73,120 @@ end
 const ROWS = Row[]
 
 """
-Time `f` `iters` times and record the median wall time, the allocation of a
-single call, and the fraction of wall time spent in GC.
+Whether to run the collector before each timed call.  Default `false`: forcing
+it hides the collection that an allocation-heavy stage causes, which is exactly
+what this script is trying to find.  See the header.
+"""
+const _FORCE_GC = Ref(get(ENV, "FALCON_PROFILE_FORCE_GC", "0") == "1")
+
+"""
+Time `f` `iters` times and record the median and mean wall time, the allocation
+of a single call, and the share of wall time spent in GC.
 
 `setup` runs before each timed call and its result is passed to `f`; use it to
-hand each run an identical fresh input (a rewound byte source, say).
+hand each run an identical rewound input.
+
+The GC share is **aggregated over all runs**, not taken from the median run.
+Taking it from the median run reported 0.0% everywhere, and that was structural
+rather than lucky: collections land in the tail, so the median run is by
+definition one that did not collect.  The mean column is there for the same
+reason -- for an allocation-heavy stage the mean sits well above the median and
+that gap *is* the collector.
 """
 function measure!(label, depth, f; iters = 20, setup = () -> nothing)
     f(setup())                                   # compile, and warm any cache
     ts = Float64[]
-    gcs = Float64[]
+    total_gc = 0.0
     local alloc
     for _ in 1:iters
         arg = setup()
-        GC.gc(false)                             # start from a comparable heap
+        _FORCE_GC[] && GC.gc(false)              # off by default; see the header
         st = Base.gc_num()
         t0 = time_ns()
         f(arg)
         dt = (time_ns() - t0) / 1e6
         d = Base.GC_Diff(Base.gc_num(), st)
         push!(ts, dt)
-        push!(gcs, d.total_time / 1e6)
+        total_gc += d.total_time / 1e6
         alloc = d.allocd
     end
-    p = sortperm(ts)
-    mid = p[length(p) ÷ 2 + 1]
-    push!(ROWS, Row(label, depth, ts[mid], alloc / 2^20,
-                    ts[mid] > 0 ? 100 * gcs[mid] / ts[mid] : 0.0, iters))
+    sort!(ts)
+    wall = sum(ts)
+    push!(ROWS, Row(label, depth, ts[length(ts) ÷ 2 + 1], wall / length(ts),
+                    alloc / 2^20, wall > 0 ? 100 * total_gc / wall : 0.0, iters))
+    return nothing
+end
+
+"""
+Report a whole operation twice: as it behaves in steady state, and with the
+collector run immediately before each call.
+
+The gap between the two is not "GC pause time".  Forcing a collection also
+hands the timed call a *compacted* heap, which allocation is much faster into
+and which no real workload ever has.  So the pair brackets the truth: the
+steady-state figure is what a caller sees, the fresh-heap figure is what the
+code would cost if allocation were free, and the difference is the price of
+allocating into a live heap -- pauses included.
+
+This is reported explicitly because the `gc%` column reads 0.0 at these
+iteration counts and that is honest rather than broken: 20 calls allocating
+~1.9 MB each will often not trigger a single collection, so no pause is
+attributed even though allocation is dominating.  The finding lives in the
+gap, not in the column (docs/debug_log.md #035).
+"""
+function measure_both!(label, f; iters = 200, setup = () -> nothing)
+    was = _FORCE_GC[]
+    _FORCE_GC[] = false; measure!(label * " [steady state]", 1, f; iters, setup)
+    _FORCE_GC[] = true;  measure!(label * " [after a forced GC]", 1, f; iters, setup)
+    _FORCE_GC[] = was
     return nothing
 end
 
 function print_rows()
-    @printf("%-44s %12s %12s %7s %6s\n", "stage", "median ms", "alloc MB", "gc%", "iters")
-    println("-"^86)
+    @printf("%-42s %10s %10s %10s %6s %6s\n",
+            "stage", "median ms", "mean ms", "alloc MB", "gc%", "iters")
+    println("-"^90)
     for r in ROWS
-        @printf("%-44s %12.4f %12.3f %7.1f %6d\n",
-                "  "^r.depth * r.label, r.ms, r.alloc_mb, r.gc_pct, r.n)
+        @printf("%-42s %10.4f %10.4f %10.3f %6.1f %6d\n",
+                "  "^r.depth * r.label, r.ms, r.mean_ms, r.alloc_mb, r.gc_pct, r.n)
     end
     println()
 end
 
-"A deterministic byte source that can be rewound, so every run does equal work."
+"""
+A deterministic byte source that is *rewound* before each run, so every run does
+equal work.
+
+The bytes are generated once and the same `ReplayBytes` is reused with `pos`
+reset.  An earlier version built a new `ReplayBytes` per run, which allocated a
+fresh megabyte outside every timed region -- and that turned out to bias the
+result the same way an explicit `GC.gc()` does, by making the collector fire
+during setup instead of during the call being measured.  Signing came out at
+1.34 ms that way against 2.13 ms honestly measured.  Two different mechanisms,
+one mistake: *anything* that empties the heap between runs hides the cost of
+filling it (docs/debug_log.md #035).
+"""
 function fresh_source(seed::AbstractString, nbytes::Integer)
-    return () -> ReplayBytes(shake256(codeunits(seed), nbytes))
+    rb = ReplayBytes(shake256(codeunits(seed), nbytes))
+    return function ()
+        rb.pos = 0
+        return rb
+    end
 end
+
+"""
+Wraps a `randombytes` source and counts calls and bytes.  The *number of calls*
+is the interesting quantity: each one allocates a `Vector{UInt8}`, so a stage
+that draws 20 kB in 5000 calls costs very differently from one that draws it in
+three.
+"""
+mutable struct CountingSource
+    inner::Any
+    calls::Int
+    bytes::Int
+end
+CountingSource(inner) = CountingSource(inner, 0, 0)
+(c::CountingSource)(k::Integer) = (c.calls += 1; c.bytes += k; c.inner(k))
 
 # ---------------------------------------------------------------------------
 # the stages
@@ -202,8 +284,22 @@ function main(args)
     println()
     msg = collect(b"falcon-jl profile message")
     ssrc = fresh_source("falcon-jl/profile/sign", 1 << 20)
-    measure!("falcon_sign (whole)", 1, s -> falcon_sign(sk, msg, bytesource_of(s));
-             iters = 20, setup = ssrc)
+    measure_both!("falcon_sign (whole)", s -> falcon_sign(sk, msg, bytesource_of(s));
+                  iters = 200, setup = ssrc)
+
+    # How much of signing is the `randombytes` interface itself?  Every call
+    # returns a freshly allocated `Vector{UInt8}`, and the sampler makes a great
+    # many small ones -- 9 bytes for the base sampler, 1 for the sign bit, 1 per
+    # rejection round inside berexp.  Count them, then price that many calls at
+    # the same size mix, so the figure is the interface's cost and not a guess.
+    cnt = CountingSource(ssrc())
+    falcon_sign(sk, msg, cnt)
+    @printf("# one signature makes %d randombytes calls for %d bytes (mean %.1f per call)\n",
+            cnt.calls, cnt.bytes, cnt.bytes / cnt.calls)
+    ncalls = cnt.calls
+    measure!("randombytes interface alone (that many calls)", 2,
+             s -> (for i in 1:ncalls; s(i % 3 == 1 ? 9 : 1); end);
+             iters = 20, setup = fresh_source("falcon-jl/profile/src", 1 << 20))
 
     salt = shake256(codeunits("salt"), SALT_LEN)
     measure!("hash_to_point", 2, _ -> hash_to_point(msg, salt, n; q = p.q); iters = 50)
@@ -236,7 +332,7 @@ function main(args)
     println("# verification")
     println()
     sig = falcon_sign(sk, msg, bytesource_of(ssrc()))
-    measure!("falcon_verify (whole)", 1, _ -> falcon_verify(pk, msg, sig); iters = 200)
+    measure_both!("falcon_verify (whole)", _ -> falcon_verify(pk, msg, sig); iters = 400)
     measure!("decode_signature", 2, _ -> decode_signature(sig); iters = 200)
     _, vsalt, vs2 = decode_signature(sig)
     measure!("hash_to_point", 2, _ -> hash_to_point(msg, vsalt, n; q = p.q); iters = 200)
