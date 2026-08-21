@@ -352,7 +352,53 @@ is safe precisely because that quantity is bounded away from zero by the
 rejection test.
 """
 div_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64}) =
-    (_checklen(f, g); ComplexF64[f[i] / g[i] for i in eachindex(f)])
+    (_checklen(f, g); ComplexF64[_cdiv_cref(f[i], g[i]) for i in eachindex(f)])
+
+"""
+Complex division **spelled the way the C reference spells it**, so that the
+result agrees with it bit for bit.
+
+    m  = 1 / (b_re^2 + b_im^2)
+    b' = (b_re*m, -b_im*m)              # the reciprocal, formed explicitly
+    d  = (a_re*b'_re - a_im*b'_im,  a_re*b'_im + a_im*b'_re)
+
+[C-ref] scripts/cref/fft.c:122-146 (`FPC_DIV`), used by `Zf(poly_div_fft)` and
+`Zf(poly_LDL_fft)`.
+
+## Why this is not `a / b`
+
+THIS BRANCH diverges from the specification here, and it is worth being exact
+about where.  Julia's `Complex{Float64}` division uses Smith's algorithm: it
+scales by whichever of `|b_re|`, `|b_im|` is larger, so that `b_re^2 + b_im^2`
+cannot overflow or underflow when the true quotient is representable.  Python
+does the same, so `main` -- which follows the Python reference -- gets Smith's
+answer.  The C reference does not: it forms `1/|b|^2` directly and multiplies.
+
+The two agree to about an ulp and disagree in the last bit constantly.  Since
+FALCON's signature is a *rounded* function of these values, "about an ulp"
+propagates into different sampler decisions and hence different signature
+bytes, which is why this one line is the difference between reproducing the C
+reference's signatures and not (docs/debug_log.md #048).
+
+Measured on this branch, this is the **only** FFT-domain primitive that
+differed: `fft`, `ifft`, `split_fft`, `merge_fft`, `add_fft`, `sub_fft`,
+`mul_fft`, `adj_fft` and the fused adjoint products were already bit-exact
+against C at every degree from 8 to 1024.
+
+NUMERICS: Smith's algorithm is the better one, and this is a deliberate step
+down.  C gets away with it because Falcon's dynamic range is small -- the
+specification says so in section 4.1: "exponents remain relatively close to
+zero; no infinite or NaN is obtained".  Outside FALCON's inputs this routine
+will overflow where `a / b` would not.
+"""
+@inline function _cdiv_cref(a::ComplexF64, b::ComplexF64)
+    br = real(b); bi = imag(b)
+    m = 1.0 / (br * br + bi * bi)
+    br *= m
+    bi *= -m
+    ar = real(a); ai = imag(a)
+    return ComplexF64(ar * br - ai * bi, ar * bi + ai * br)
+end
 
 """
     adj_fft(f_fft)

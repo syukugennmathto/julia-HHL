@@ -202,8 +202,35 @@ are scalars (`normalize_tree!`).
 function ldl_fft(G::Matrix{Vector{ComplexF64}})
     size(G) == (2, 2) || throw(ArgumentError("ldl_fft expects a 2x2 matrix"))
     D00 = copy(G[1, 1])
-    L10 = div_fft(G[2, 1], G[1, 1])
-    D11 = sub_fft(G[2, 2], mul_fft(mul_fft(L10, adj_fft(L10)), G[1, 1]))
+
+    # THIS BRANCH computes D11 the way the C reference does, which is not the
+    # way the specification writes it.  Algorithm 8 (and the Python reference,
+    # ffsampling.py:80-82) says
+    #
+    #     L10 = G10 / G00
+    #     D11 = G11 - L10 * adj(L10) * G00           -- three multiplications
+    #
+    # while C keeps the quotient the other way round and folds:
+    #
+    #     mu  = G01 / G00
+    #     D11 = G11 - mu * adj(G01)                  -- one multiplication
+    #     L10 = adj(mu)
+    #
+    # [C-ref] scripts/cref/fft.c, `Zf(poly_LDL_fft)`
+    #
+    # They are equal in exact arithmetic -- `mu*adj(G01) = |G01|^2/G00` and
+    # `L10*adj(L10)*G00 = |G01|^2/|G00|^2 * G00`, and G00 is real because it is
+    # Hermitian -- and they differ in the last bit in floating point.  Since the
+    # sampler *rounds* what comes out of here, a last-bit difference becomes a
+    # different signature (docs/debug_log.md #048).
+    #
+    # `G01` is recovered as `adj(G[2,1])` rather than read from `G[1,2]`: the
+    # conjugate is a sign flip and therefore exact, and this way the routine
+    # does not depend on the caller having filled the redundant upper corner.
+    G01 = adj_fft(G[2, 1])
+    mu = div_fft(G01, G[1, 1])
+    L10 = adj_fft(mu)
+    D11 = sub_fft(G[2, 2], mul_fft(mu, G[2, 1]))
     return (L10, D00, D11)
 end
 
@@ -318,6 +345,161 @@ function ffnp_fft(t::NTuple{2,Vector{ComplexF64}}, T::FalconTree)
     else
         return (ComplexF64[round(real(t[1][1]))], ComplexF64[round(real(t[2][1]))])
     end
+end
+
+
+# ---------------------------------------------------------------------------
+# The bottom of the recursion, as the C reference writes it
+# ---------------------------------------------------------------------------
+
+"1/sqrt(2), as the C reference spells it.  [C-ref] scripts/cref/fpr.h, `fpr_invsqrt2`"
+const INVSQRT2 = 0.707106781186547524400844362105
+
+"1/sqrt(8).  [C-ref] scripts/cref/fpr.h, `fpr_invsqrt8`"
+const INVSQRT8 = 0.353553390593273762200422181052
+
+"""
+    _ffsampling_c4(t0, t1, node, sigmin, randombytes) -> (z0, z1)
+
+The last two levels of `ffsampling_fft`, at degree 4, transcribed operation by
+operation from the C reference's hand-unrolled block.
+
+[C-ref] scripts/cref/sign.c, `ffSampling_fft`, the `logn == 2` case.
+
+## NOT WIRED IN.  Read this before changing that.
+
+`ffsampling_fft` does **not** call this.  It is reachable, tested against the C
+reference, and deliberately left disconnected, because what has been verified
+is not what would be needed to connect it.
+
+What is verified: with a *deterministic* stand-in for the sampler (plain
+`floor`, which consumes no randomness), substituting this block makes the whole
+recursion agree with C bit for bit at every degree from 4 to 512, where the
+generic recursion disagrees from degree 4 upward.  So the **arithmetic** is
+right.
+
+What is not verified: the **order and count of the `samplerz` calls**.  Each
+call consumes bytes, so a transcription that computes the same numbers while
+asking for randomness in a different order still produces a different
+signature -- and the `floor` measurement is blind to exactly that.  Wiring
+this in made `FFSAMPLING_KAT` (recorded from the Python reference) fail, which
+is expected on this branch and therefore says nothing either way about whether
+the four calls below are in C's order.
+
+Settling it needs C driven with the real sampler off a controlled PRNG, which
+is the next step and has not been done.  Until then this stays disconnected:
+shipping it would be trading a divergence that is understood for one that is
+not (docs/debug_log.md #048).
+
+## Why it exists at all
+
+THIS BRANCH is trying to reproduce the C reference's signature *bytes*.  Every
+floating-point primitive underneath was checked against C and found bit-exact
+-- `fft`, `ifft`, `split_fft`, `merge_fft`, `add_fft`, `sub_fft`, `mul_fft`,
+`adj_fft`, `div_fft` (once spelled C's way, see fft.jl) and `ldl_fft` (ditto).
+The recursion built from them still disagreed, and bisecting by degree put the
+first disagreement at degree 4 -- exactly where C stops calling its own
+`poly_split_fft` / `poly_merge_fft` and runs a flat block of scalar
+operations instead (docs/debug_log.md #048).
+
+The block is not doing different mathematics.  It is doing the same split and
+merge with the constants pre-folded:
+
+  * `split`: the generic routine computes `0.5*(a - b)` and then multiplies by
+    `conj(w)` where `w = exp(i*pi/4)`.  C folds the halving and the twiddle
+    into one constant, `1/sqrt(8)`, and does one multiplication where the
+    generic path does two.
+  * `merge`: the generic routine multiplies by `w`; C computes
+    `(b_re - b_im)/sqrt(2)` and `(b_re + b_im)/sqrt(2)`, two real
+    multiplications instead of a complex one.
+
+Fewer roundings, different roundings.  Substituting this block made the whole
+recursion agree with C at every degree from 4 to 512.
+
+CONSTANT TIME: unchanged from the generic path -- the data-dependent work is
+all inside `samplerz`.
+
+NOTE ON THE ORDER OF SAMPLER CALLS: the four `samplerz` calls below are in C's
+order, and that order matters because each call consumes bytes from
+`randombytes`.  The bit-exactness measurement that motivated this block used a
+deterministic stand-in for the sampler, so it verified the *arithmetic* and
+not the *consumption order*; the order here is transcribed from the C source,
+not measured.
+"""
+function _ffsampling_c4(t0::Vector{ComplexF64}, t1::Vector{ComplexF64},
+                        node::FFLDLNode, sigmin::Real, randombytes)
+    L = node.l10
+    tree0 = node.left::FFLDLNode
+    tree1 = node.right::FFLDLNode
+    l0 = tree0.l10[1]
+    l1 = tree1.l10[1]
+    s0a = (tree0.left::FFLDLLeaf).sigma;  s0b = (tree0.right::FFLDLLeaf).sigma
+    s1a = (tree1.left::FFLDLLeaf).sigma;  s1b = (tree1.right::FFLDLLeaf).sigma
+    for s in (s0a, s0b, s1a, s1b)
+        isnan(s) && throw(ArgumentError(
+            "ffsampling_fft on an un-normalised tree: call normalize_tree! first"))
+    end
+
+    # --- split t1, sample, merge into z1
+    a_re = real(t1[1]); a_im = imag(t1[1]); b_re = real(t1[2]); b_im = imag(t1[2])
+    c_re = a_re + b_re; c_im = a_im + b_im
+    w0 = 0.5 * c_re;    w1 = 0.5 * c_im
+    c_re = a_re - b_re; c_im = a_im - b_im
+    w2 = (c_re + c_im) * INVSQRT8
+    w3 = (c_im - c_re) * INVSQRT8
+    x0 = w2; x1 = w3
+    w2 = Float64(samplerz(x0, s1b, sigmin, randombytes))
+    w3 = Float64(samplerz(x1, s1b, sigmin, randombytes))
+    a_re = x0 - w2; a_im = x1 - w3
+    b_re = real(l1); b_im = imag(l1)
+    c_re = a_re * b_re - a_im * b_im
+    c_im = a_re * b_im + a_im * b_re
+    x0 = c_re + w0; x1 = c_im + w1
+    w0 = Float64(samplerz(x0, s1a, sigmin, randombytes))
+    w1 = Float64(samplerz(x1, s1a, sigmin, randombytes))
+    a_re = w0; a_im = w1; b_re = w2; b_im = w3
+    c_re = (b_re - b_im) * INVSQRT2
+    c_im = (b_re + b_im) * INVSQRT2
+    z1u = complex(a_re + c_re, a_im + c_im)
+    z1v = complex(a_re - c_re, a_im - c_im)
+    z1 = ComplexF64[z1u, z1v, conj(z1u), conj(z1v)]
+
+    # --- tb0 = t0 + (t1 - z1) * L
+    w0 = real(t1[1]) - real(z1[1]); w1 = real(t1[2]) - real(z1[2])
+    w2 = imag(t1[1]) - imag(z1[1]); w3 = imag(t1[2]) - imag(z1[2])
+    a_re = w0; a_im = w2; b_re = real(L[1]); b_im = imag(L[1])
+    w0 = a_re * b_re - a_im * b_im
+    w2 = a_re * b_im + a_im * b_re
+    a_re = w1; a_im = w3; b_re = real(L[2]); b_im = imag(L[2])
+    w1 = a_re * b_re - a_im * b_im
+    w3 = a_re * b_im + a_im * b_re
+    w0 += real(t0[1]); w1 += real(t0[2]); w2 += imag(t0[1]); w3 += imag(t0[2])
+
+    # --- split tb0, sample, merge into z0
+    a_re = w0; a_im = w2; b_re = w1; b_im = w3
+    c_re = a_re + b_re; c_im = a_im + b_im
+    w0 = 0.5 * c_re;    w1 = 0.5 * c_im
+    c_re = a_re - b_re; c_im = a_im - b_im
+    w2 = (c_re + c_im) * INVSQRT8
+    w3 = (c_im - c_re) * INVSQRT8
+    x0 = w2; x1 = w3
+    w2 = Float64(samplerz(x0, s0b, sigmin, randombytes))
+    w3 = Float64(samplerz(x1, s0b, sigmin, randombytes))
+    a_re = x0 - w2; a_im = x1 - w3
+    b_re = real(l0); b_im = imag(l0)
+    c_re = a_re * b_re - a_im * b_im
+    c_im = a_re * b_im + a_im * b_re
+    x0 = c_re + w0; x1 = c_im + w1
+    w0 = Float64(samplerz(x0, s0a, sigmin, randombytes))
+    w1 = Float64(samplerz(x1, s0a, sigmin, randombytes))
+    a_re = w0; a_im = w1; b_re = w2; b_im = w3
+    c_re = (b_re - b_im) * INVSQRT2
+    c_im = (b_re + b_im) * INVSQRT2
+    z0u = complex(a_re + c_re, a_im + c_im)
+    z0v = complex(a_re - c_re, a_im - c_im)
+    z0 = ComplexF64[z0u, z0v, conj(z0u), conj(z0v)]
+
+    return (z0, z1)
 end
 
 """
