@@ -99,6 +99,19 @@ Karatsuba product of two length-`n` polynomials, returning the full `2n`
 coefficients *without* reduction modulo `x^n + 1`.
 
 [Py-ref] scripts/pyref/ntrugen.py:14-38
+
+**`karamul` no longer calls this.**  It is kept for two reasons that are not
+performance: it is the transcription of what the Python reference does, and it
+is an independent oracle for `_negacyclic_schoolbook` in the tests -- two
+different algorithms agreeing on random inputs is worth more than either one
+agreeing with itself.
+
+It lost the job by measurement, not by being wrong: at every size tried, from
+n = 2 to n = 2048, it is slower than the schoolbook that allocates nothing
+(docs/debug_log.md #047).  A non-allocating Karatsuba would be a different
+contest; this one is between "n^1.58 multiplications, each allocating" and
+"n^2 multiply-accumulates, allocating nothing", and at these sizes the malloc
+count decides it.
 """
 function karatsuba(a::AbstractVector{BigInt}, b::AbstractVector{BigInt}, n::Int)
     if n == 1
@@ -122,6 +135,66 @@ function karatsuba(a::AbstractVector{BigInt}, b::AbstractVector{BigInt}, n::Int)
         ab[i + m] += axbx[i]
     end
     return ab
+end
+
+# GMP's full-width fused multiply-accumulate, the bignum-by-bignum siblings of
+# the `_ui` pair used by `_negacyclic_addmul!`.  `r += a*b` and `r -= a*b` with
+# no temporary.  Base.GMP.MPZ wraps neither.
+@inline _addmul!(r::BigInt, a::BigInt, b::BigInt) =
+    ccall((:__gmpz_addmul, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Ref{BigInt}), r, a, b)
+
+@inline _submul!(r::BigInt, a::BigInt, b::BigInt) =
+    ccall((:__gmpz_submul, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Ref{BigInt}), r, a, b)
+
+"""
+    _negacyclic_schoolbook(a, b, n) -> Vector{BigInt}
+
+`a * b` in `Z[x]/(x^n + 1)` by schoolbook, accumulating in place with GMP's
+`mpz_addmul`.
+
+## Why this beats Karatsuba here, when asymptotically it should not
+
+Karatsuba does `n^1.58` coefficient multiplications where this does `n^2`, and
+at the sizes this file actually reaches -- `n <= 64` on the multiprecision
+path -- that is 811 against 4096.  Karatsuba nonetheless loses, because the
+`n^1.58` is paid in *full* `BigInt` products, each allocating a fresh GMP
+object, plus a recursion tree of temporary arrays and `SubArray`s.  This does
+`n^2` operations and allocates **nothing**: `mpz_addmul` reads two operands and
+adds the product into a third, in place.
+
+Allocation was 55% of the whole descent when it was measured (#044), so the
+count that matters is not multiplications but `malloc`s, and one of these is
+zero.
+
+The same reasoning already replaced `karamul` inside `babai_reduce`, where the
+second operand is a machine word (`_negacyclic_addmul!`).  This is the
+large-by-large case: the `lift(F') * conj(g)` products of the recursion.
+
+Pornin-Prest section 5.4 makes the same argument for the reduction, and adds
+that the crossover to an RNS/NTT method "heavily depends on implementation
+details and the involved hardware, and thus should be measured".  Measured
+here: docs/debug_log.md #047.
+
+`karatsuba` is kept, and is still what `karamul` uses above the crossover.
+"""
+function _negacyclic_schoolbook(a::AbstractVector{BigInt}, b::AbstractVector{BigInt},
+                                n::Int)
+    acc = BigInt[BigInt() for _ in 1:n]
+    @inbounds for i in 1:n
+        ai = a[i]
+        iszero(ai) && continue
+        for j in 1:n
+            k = i + j - 2               # degree of the term, zero-indexed
+            if k < n
+                _addmul!(acc[k + 1], ai, b[j])
+            else
+                _submul!(acc[k - n + 1], ai, b[j])   # x^n = -1
+            end
+        end
+    end
+    return acc
 end
 
 """
@@ -189,8 +262,13 @@ function karamul(a::AbstractVector{BigInt}, b::AbstractVector{BigInt})
         return BigInt.(_negacyclic_machine(Int128, a, b, n))
     end
 
-    ab = karatsuba(a, b, n)
-    return BigInt[ab[i] - ab[i + n] for i in 1:n]     # x^n = -1
+    # The multiprecision path is schoolbook, unconditionally.  There is no
+    # crossover to `karatsuba` because -- measured at every size from n = 2 to
+    # n = 2048 -- there isn't one: `karatsuba` is between 1.2x and 35x slower,
+    # and the gap *widens* with n (23x at n = 2048).  See docs/debug_log.md
+    # #047 for the table and for why the asymptotically better algorithm loses
+    # everywhere it was measured.
+    return _negacyclic_schoolbook(a, b, n)
 end
 
 """

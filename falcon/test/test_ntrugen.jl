@@ -89,6 +89,42 @@
         @test karamul(BigInt[], BigInt[]) == BigInt[]
     end
 
+    @testset "_negacyclic_schoolbook agrees with karatsuba" begin
+        # THIS BRANCH.  `karamul`'s multiprecision path is the allocation-free
+        # schoolbook, not `karatsuba` (docs/debug_log.md #047).  `karatsuba`
+        # stays as the transcription of the Python reference and, here, as an
+        # independent oracle: two different algorithms agreeing on random
+        # inputs says more than either agreeing with itself.
+        rng = MersenneTwister(20260821)
+        for n in (1, 2, 4, 8, 16, 32, 64), _ in 1:20
+            ba = rand(rng, (4, 56, 112, 208, 800))
+            bb = rand(rng, (4, 32, 56, 104, 416))
+            a = BigInt[rand(rng, big(-2)^ba:big(2)^ba) for _ in 1:n]
+            b = BigInt[rand(rng, big(-2)^bb:big(2)^bb) for _ in 1:n]
+            ab = Falcon.karatsuba(a, b, n)
+            want = BigInt[ab[i] - ab[i + n] for i in 1:n]   # x^n = -1
+            @test Falcon._negacyclic_schoolbook(a, b, n) == want
+        end
+
+        # Sparse inputs take the `iszero` skip, which is a separate path.
+        let n = 16
+            a = BigInt[iszero(i % 5) ? big(2)^300 + i : BigInt(0) for i in 1:n]
+            b = BigInt[BigInt(i) for i in 1:n]
+            ab = Falcon.karatsuba(a, b, n)
+            @test Falcon._negacyclic_schoolbook(a, b, n) ==
+                  BigInt[ab[i] - ab[i + n] for i in 1:n]
+        end
+
+        # ...and the wiring: karamul on wide coefficients must go through it.
+        let n = 8
+            a = BigInt[rand(rng, big(-2)^500:big(2)^500) for _ in 1:n]
+            b = BigInt[rand(rng, big(-2)^500:big(2)^500) for _ in 1:n]
+            ab = Falcon.karatsuba(a, b, n)
+            @test karamul(a, b) == BigInt[ab[i] - ab[i + n] for i in 1:n]
+            @test karamul(a, b) == polymul(a, b)
+        end
+    end
+
     @testset "_negacyclic_addmul! agrees with karamul, in both tiers" begin
         # THIS BRANCH.  `babai_reduce` no longer calls `karamul` for the
         # correction: `ki` is a vector of machine integers, so the product is
