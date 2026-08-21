@@ -14,15 +14,25 @@
 #   [derived] reproduced from a closed-form formula, and checked numerically
 #            against the two references above by test/test_params.jl
 #
-#   [SPEC?]  <-- READ THIS.  The session that wrote this file had no network
-#            route to falcon-sign.info, nvlpubs.nist.gov or eprint.iacr.org,
-#            so the specification PDF itself could not be opened and the
-#            *table numbers* could not be cited.  Every value below is
-#            nevertheless pinned by two mutually independent implementations
-#            (C and Python) that agree exactly.  The `spec_ref` fields are
-#            deliberately left as "TODO" rather than guessed: filling them in
-#            requires the PDF, and an invented table number is worse than an
-#            absent one.
+#   [Spec]   *Falcon: Fast-Fourier Lattice-based Compact Signatures over
+#            NTRU*, Specification **v1.2 -- 01/10/2020** (67 pages), by
+#            equation, table or section number.
+#
+# HISTORY OF THIS FILE'S PROVENANCE
+# ---------------------------------
+# From #002 until 2026-08-21 the specification PDF was unreachable from the
+# authoring environment (the egress policy blocks falcon-sign.info,
+# nvlpubs.nist.gov and eprint.iacr.org), so no table number could be cited and
+# every `spec_ref` field read "TODO" -- deliberately, on the principle that an
+# invented table number is worse than an absent one.  Every value was pinned
+# instead by two mutually independent implementations (C and Python) that
+# agree exactly.
+#
+# The PDF arrived on 2026-08-21.  Every literal below was then checked against
+# it, digit by digit, and `test/test_spec.jl` transcribes the tables so that
+# the check is permanent rather than a thing that happened once.
+# **Nothing changed value.**  The two implementations had been right about
+# all of it (docs/debug_log.md #046).
 
 """
     FalconParams
@@ -71,7 +81,7 @@ struct FalconParams
     "signature length in bytes in the PADDED format (exact)"
     sig_bytes::Int
 
-    "placeholder for the specification table reference; see PROVENANCE POLICY"
+    "where this parameter set is given in the specification"
     spec_ref::String
 end
 
@@ -84,6 +94,13 @@ end
 
 The FALCON modulus, `q = 12289 = 12*1024 + 1 = 3*2^12 + 1`.
 
+[Spec] equation (2.10), section 2.6 (p.18).  The specification's wording is
+       that `q` "needs to be a prime of the form `k*2n + 1` in order to
+       maximize the efficiency of the NTT", and that 12289 is *the smallest
+       such prime*.  It also records that at this size `q` "has essentially no
+       influence on security": large enough to resist hybrid attacks and
+       trivial attacks on SIS, small enough to resist overstretched-NTRU
+       attacks.  So it is an efficiency parameter, not a security one.
 [Py-ref] scripts/pyref/common.py:5  (`q = 12 * 1024 + 1`)
 
 The shape `3*2^12 + 1` is what makes the NTT possible: `q - 1 = 3*2^12` is
@@ -132,19 +149,44 @@ agreement one expects between a Float64 evaluation here and however the
 reference authors evaluated it.  The *authoritative* values remain the
 literals in `FALCON_512` / `FALCON_1024`; this function exists to document
 where they come from and to catch a mistyped digit.
+
+[Spec] The specification gives `sigma_min` only as a literal, in Table 3.3.
+       It does not print the formula or the `eps` that produced it, so this
+       function stays `[derived]` even now that the PDF is in hand.  What the
+       PDF did settle is that `sigma_min` is **not** `eta` at the `eps` of
+       equation (2.13): see `falcon_eps` below, and test/test_spec.jl.
 """
 smoothing_eta(eps::Float64) = (1 / pi) * sqrt(0.5 * log(2 * (1 + 1 / eps)))
 
 """
     falcon_eps(n) -> Float64
 
-The statistical-distance budget `eps = 1 / sqrt(2^64 * n^3)`.
+The statistical-distance budget `eps = 1 / sqrt(2^64 * n^3)` **that produces
+`sigma_min`**.
 
 [derived]  Recovered by inverting the reference `sigmin` values: solving
 `smoothing_eta(eps) == sigmin` gives `log2(1/eps) = 45.5` for `n = 512` and
 `47.0` for `n = 1024`, i.e. `1/eps = 2^32 * n^(3/2)`.  The `2^64` is the usual
-bound on the attacker's work and `n^3` the usual union bound over queries; the
-exact wording belongs in [SPEC?] and is left for the PDF.
+bound on the attacker's work and `n^3` the usual union bound over queries.
+
+## This is NOT the epsilon of equation (2.13)
+
+Worth stating outright, because assuming otherwise is the natural mistake.
+The specification's section 2.6 says "It suffices to take `eps <= 1/sqrt(Qs *
+lambda)`" with `Qs = 2^64` and `lambda = 128` (Level I) or `256` (Level V),
+and equation (2.13) uses *that* `eps` to give the signature width:
+
+    sigma = (1/pi) * sqrt( log(4n(1 + 1/eps)) / 2 ) * 1.17 * sqrt(q)
+
+Evaluated at `eps = 1/sqrt(2^64 * lambda)`, that reproduces Table 3.3's
+`sigma` to the last bits (relative error 2e-16).  Evaluated at the `eps` this
+function returns, it is off by 10%.  Conversely `smoothing_eta` at *this*
+`eps` gives `sigma_min` to 3e-13, and at the (2.13) `eps` it is off by 11%.
+
+**So the two standard deviations in Table 3.3 come from two different
+epsilons**, and the specification prints neither next to the other.  Both
+directions are asserted in test/test_spec.jl so that a future simplification
+cannot quietly unify them.  See docs/debug_log.md #046.
 """
 falcon_eps(n::Integer) = 1 / sqrt(2.0^64 * float(n)^3)
 
@@ -153,6 +195,14 @@ falcon_eps(n::Integer) = 1 / sqrt(2.0^64 * float(n)^3)
 
 The *fixed* standard deviation `1.43300980528773` at which key generation
 samples its raw Gaussian coefficients, independently of `n`.
+
+[Spec] equation (2.12), section 2.6 (p.18) gives the *effective* width:
+       `sigma_{f,g} = 1.17 * sqrt(q / 2n)`.  The constant below is that width
+       divided by `sqrt(4096/n)`, i.e. what one draw must be for the sum of
+       `4096/n` of them to have the specified width.  The specification does
+       not mandate the folding -- it is the reference implementations' way of
+       reaching (2.12) with one table -- but reproducing it is what makes the
+       byte streams agree.
 
 [Py-ref] scripts/pyref/ntrugen.py:210-211
          (comment `# 1.17 * sqrt(12289 / 8192)`, then `sigma = 1.43300980528773`)
@@ -181,6 +231,10 @@ const SIGMA_FG_BASE = 1.43300980528773
 The quality factor `1.17`: key generation is rejected unless the Gram-Schmidt
 norm of the NTRU basis satisfies `||B~||^2 <= 1.17^2 * q`.
 
+[Spec] equation (2.11), section 2.6 (p.18): `||B||_GS <= 1.17 * sqrt(q)`,
+       attributed to [DLP14, Section 3], and holding "upon resampling a finite
+       number of times" -- which is exactly why this appears as a rejection
+       condition and not as an assertion.
 [Py-ref] scripts/pyref/ntrugen.py:232  (`if gs_norm(f, g, q) > (1.17 ** 2) * q`)
 
 This single constant is what ties the three sigmas together: the signature
@@ -219,15 +273,15 @@ const FALCON_512 = FalconParams(
     512,                    # n
     9,                      # logn
     Q,                      # q
-    165.7366171829776,      # sigma       [Py-ref] falcon.py:131
-    1.2778336969128337,     # sigma_min   [Py-ref] falcon.py:132
-    1.8205,                 # sigma_max   [Py-ref] samplerz.py:10 (MAX_SIGMA)
+    165.7366171829776,      # sigma       [Spec] Table 3.3 (165.736 617 183); (2.13)
+    1.2778336969128337,     # sigma_min   [Spec] Table 3.3 (1.277 833 697)
+    1.8205,                 # sigma_max   [Spec] Table 3.3 (1.8205, both sets)
     1.17 * sqrt(Q / (2 * 512)),  # sigma_fg  [Py-ref] ntrugen.py:208 (effective width)
-    34034726,               # sig_bound   [C-ref] common.c:250 == [Py-ref] falcon.py:133
-    897,                    # pubkey_bytes   [C-ref] falcon.h:317 @ logn=9
-    1281,                   # privkey_bytes  [C-ref] falcon.h:308 @ logn=9
+    34034726,               # sig_bound   [Spec] Table 3.3 (34 034 726); (2.14)
+    897,                    # pubkey_bytes   [Spec] Table 3.3 (897)
+    1281,                   # privkey_bytes  [C-ref] falcon.h:308 @ logn=9 -- NOT in Table 3.3
     666,                    # sig_bytes   [C-ref] falcon.h:335 == [Py-ref] falcon.py:134
-    "TODO: spec table number (PDF unreachable from the authoring session)",
+    "Falcon spec v1.2 (01/10/2020), Table 3.3, column Falcon-512 (p.51)",
 )
 
 """
@@ -246,15 +300,15 @@ const FALCON_1024 = FalconParams(
     1024,                   # n
     10,                     # logn
     Q,                      # q
-    168.38857144654395,     # sigma       [Py-ref] falcon.py:139
-    1.298280334344292,      # sigma_min   [Py-ref] falcon.py:140
-    1.8205,                 # sigma_max   [Py-ref] samplerz.py:10 (MAX_SIGMA)
+    168.38857144654395,     # sigma       [Spec] Table 3.3 (168.388 571 447); (2.13)
+    1.298280334344292,      # sigma_min   [Spec] Table 3.3 (1.298 280 334)
+    1.8205,                 # sigma_max   [Spec] Table 3.3 (1.8205, both sets)
     1.17 * sqrt(Q / (2 * 1024)),  # sigma_fg [Py-ref] ntrugen.py:208 (effective width)
-    70265242,               # sig_bound   [C-ref] common.c:252 == [Py-ref] falcon.py:141
-    1793,                   # pubkey_bytes   [C-ref] falcon.h:317 @ logn=10
-    2305,                   # privkey_bytes  [C-ref] falcon.h:308 @ logn=10
+    70265242,               # sig_bound   [Spec] Table 3.3 (70 265 242); (2.14)
+    1793,                   # pubkey_bytes   [Spec] Table 3.3 (1 793)
+    2305,                   # privkey_bytes  [C-ref] falcon.h:308 @ logn=10 -- NOT in Table 3.3
     1280,                   # sig_bytes   [C-ref] falcon.h:335 == [Py-ref] falcon.py:141
-    "TODO: spec table number (PDF unreachable from the authoring session)",
+    "Falcon spec v1.2 (01/10/2020), Table 3.3, column Falcon-1024 (p.51)",
 )
 
 """

@@ -7,16 +7,43 @@
 
 | # | 資料 | 所在 | 用途 |
 |:--|:---|:---|:---|
+| **S** | **Falcon 仕様書** *Falcon: Fast-Fourier Lattice-based Compact Signatures over NTRU*, **Specification v1.2 — 01/10/2020**、67 頁 | 本文はリポジトリに含めない（下記） | `[Spec]` タグの引用元。**パラメータの一次資料** |
 | A | **Falcon 参照実装（C）** `Falcon-impl-20211101.zip` | `scripts/cref/`（vendor 済、MIT）。経緯は `scripts/cref/PROVENANCE.md` | `[C-ref]` タグの引用元。速度対決の相手 |
 | B | **Python 参照実装** tprest/falcon.py | `scripts/pyref/`（vendor 済、MIT） | `[Py-ref]` タグの引用元。golden vector 生成 |
 | C | **Pornin, Prest: More Efficient Algorithms for the NTRU Key Generation using the Field Norm** (IACR ePrint **2019/015**, 31 頁) | 本文はリポジトリに含めない（下記） | 降下アルゴリズムの一次資料 |
 
-### C（論文）をリポジトリに入れていない理由
+### S（仕様書）のどこに何があるか
+
+`test/test_spec.jl` が該当箇所を**転記して検査している**ので、
+この表は入口であって、実物はそちらにある。
+
+| 箇所 | 内容 | 対応 |
+|:---|:---|:---|
+| **Table 3.3**（p.51） | パラメータ表。σ, σmin, σmax, ⌊β²⌋, 公開鍵長, 署名長 | `FALCON_512` / `FALCON_1024`。`spec_ref` はここを指す |
+| (2.10) §2.6 | `q = 12·1024+1 = 12289`、「`k·2n+1` 型の最小の素数」 | `Q` |
+| (2.11) §2.6 | `‖B‖_GS ≤ 1.17·√q` | `gram_schmidt_quality()` |
+| (2.12) §2.6 | `σ_{f,g} = 1.17·√(q/2n)` | `SIGMA_FG_BASE` と `sigma_fg` |
+| (2.13) §2.6 | `σ = (1/π)·√(log(4n(1+1/ε))/2)·1.17·√q`、`ε ≤ 1/√(Q_s·λ)` | `sigma`。**σmin とは別の ε**（#046） |
+| (2.14) §2.6 | `β = τ·σ·√(2n)`, `τ = 1.1`、判定は `⌊β²⌋` | `sig_bound` |
+| **Table 3.1**（p.41） | BaseSampler の pdt/cdt/RCDT（2^72 倍） | `RCDT`, `RCDT_PREC` |
+| **Table 3.2**（p.44-45） | SamplerZ のテストベクタ 16 本 | `test_spec.jl`。**#022 の replay 規約はここで決着**（`reversed_chunks = true`） |
+| Algorithm 1-18 | `splitfft`/`mergefft`/`HashToPoint`/`Keygen`/`NTRUGen`/`NTRUSolve`/`Reduce`/`LDL*`/`ffLDL*`/`Sign`/`ffSampling`/`BaseSampler`/`BerExp`/`SamplerZ`/`Verify`/`Compress`/`Decompress` | 各モジュール |
+| §4 | 実装上の注記（浮動小数点、FFT/NTT、LDL 木、鍵生成、性能） | `docs/math/` |
+
+**σmin だけは Table 3.3 に値しかなく、導出が書かれていない。**
+`smoothing_eta` / `falcon_eps` は依然 `[derived]` である（#046）。
+
+**秘密鍵のバイト長も Table 3.3 に無い**
+（"Private key size (not listed above) is about three times that of a signature"）。
+`privkey_bytes` は `[C-ref]` のままである。
+
+### S（仕様書）と C（論文）をリポジトリに入れていない理由
 
 MIT ではないので、全文を vendor しない。
 **節番号で引用し、必要な箇所だけ短く引く**という形にしてある
 （この文書と `docs/debug_log.md`、`docs/math/06_ntrugen.md` がそれ）。
-入手先: <https://eprint.iacr.org/2019/015>。
+入手先: 仕様書は <https://falcon-sign.info/>（提出パッケージ同梱の
+`falcon.pdf`）、論文は <https://eprint.iacr.org/2019/015>。
 
 ### 論文のどこに何が書いてあるか（この実装に関係する範囲）
 
@@ -37,12 +64,9 @@ MIT ではないので、全文を vendor しない。
 
 | 資料 | 状態 |
 |:---|:---|
-| **Falcon 仕様書 PDF**（`falcon.pdf`、提出パッケージ同梱） | **未入手。** 実行環境の egress ポリシーが falcon-sign.info / nvlpubs.nist.gov / eprint.iacr.org を遮断している（`docs/debug_log.md` #002）。ユーザから届いたのは**参照実装のアーカイブ**であって提出パッケージではなかった |
-| **FIPS 206 ドラフト** | 未入手（同上） |
+| **FIPS 206 ドラフト**（FN-DSA） | 未入手。実行環境の egress ポリシーが nvlpubs.nist.gov を遮断している（`docs/debug_log.md` #002）。このリポジトリが「FN-DSA」を名乗る根拠は Falcon 仕様書 v1.2 の方であり、FIPS 206 が Falcon に加えた変更（ドメイン分離、`ctx` など）は**反映していない** |
+| 提出パッケージの `Supporting_Documentation/additional/` | 未入手。`parameters.py`（パラメータ導出の自動化）と `test-vector-sampler-falcon{512,1024}.txt`（より詳細な SamplerZ ベクタ）が入っているはず。前者があれば σmin の ε が `[derived]` でなくなる |
 
-したがって `FalconParams.spec_ref` の「仕様書の表番号」は**まだ埋まっていない**。
-値そのものは C と Python の 2 実装が完全一致していることで担保している。
-**「値が疑わしい」のではなく「出典が書けていない」**という意味の TODO である。
-
-必要なのは提出パッケージ（`falcon-round3.zip` など）に入っている
-`falcon.pdf` の 1 ファイルだけ。
+**#002 の「仕様書 PDF に到達できない」は 2026-08-21 に解消した**（#046）。
+`FalconParams.spec_ref` は Table 3.3 を指しており、
+`test/test_spec.jl` が表そのものを転記して検査している。

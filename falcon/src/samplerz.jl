@@ -88,6 +88,9 @@
     RCDT_PREC
 
 Precision of the reverse cumulative distribution table, in bits: 72.
+
+[Spec] Table 3.1 (p.41) is headed "scaled by a factor 2^72", and (3.33) reads
+       `chi(i) = 2^-72 * pdt[i]`.
 [Py-ref] scripts/pyref/samplerz.py:13
 """
 const RCDT_PREC = 72
@@ -143,11 +146,17 @@ separately by `samplerz`, which is why no folding happens here.
 Eighteen entries of ~72 bits: these do **not** fit in `UInt64`, and Python's
 arbitrary-precision integers hide that fact completely.  `UInt128` here.
 
+[Spec] Table 3.1 (p.41), column RCDT[i], rows i = 0..17.  The table's row 18
+       (`RCDT[18] = 0`) is not stored: algorithm 12's loop runs i = 0..17, so
+       an entry that can never exceed a 72-bit `u` would be dead weight.
 [Py-ref] scripts/pyref/samplerz.py:24-43
 
 The values are transcribed, not derived -- but `test_samplerz.jl` checks them
-against the half-Gaussian they are supposed to represent, which is what would
-catch a transposed digit.
+against the half-Gaussian they are supposed to represent, and
+`test_spec.jl` rebuilds them from Table 3.1's *pdt* column via
+`RCDT[i] = 2^72 - sum_{j<=i} pdt[j]`, which is what would catch a transposed
+digit.  The pdt column is a useful second transcription precisely because its
+entries sum to exactly 2^72: nineteen 22-digit numbers with a checksum.
 """
 const RCDT = UInt128[
     3024686241123004913666,

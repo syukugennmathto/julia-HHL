@@ -81,6 +81,7 @@ include(joinpath(@__DIR__, "vectors", "falcon_kat.jl"))
     include("test_ffsampling.jl") # module 8
     include("test_encoding.jl")  # module 9
     include("test_falcon.jl")    # module 10
+    include("test_spec.jl")      # the specification's own tables (#046)
 
     # The other parameter set, end to end.  Kept last and in its own file
     # because it is by far the slowest thing in the suite: one n = 1024 key

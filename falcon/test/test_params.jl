@@ -130,11 +130,22 @@
     end
 
     @testset "provenance placeholders are honest" begin
-        # These deliberately say TODO rather than carrying an invented table
-        # number.  When the specification PDF is available, fill them in and
-        # this test becomes the reminder that it was done.
+        # These used to say TODO rather than carry an invented table number,
+        # and this test asserted the TODO -- as a reminder that the PDF was
+        # still missing, and to make removing the placeholder a deliberate act
+        # rather than something that could drift.
+        #
+        # The PDF arrived on 2026-08-21 (docs/debug_log.md #046).  So the test
+        # is inverted: the fields must now name the document and the table,
+        # and test/test_spec.jl checks that the *values* are what that table
+        # says.  A `spec_ref` naming a table nothing verifies would be back to
+        # an invented citation, which is the thing being guarded against.
         for p in (FALCON_512, FALCON_1024)
-            @test occursin("TODO", p.spec_ref)
+            @test !occursin("TODO", p.spec_ref)
+            @test occursin("Falcon spec v1.2", p.spec_ref)
+            @test occursin("Table 3.3", p.spec_ref)
         end
+        @test occursin("Falcon-512", FALCON_512.spec_ref)
+        @test occursin("Falcon-1024", FALCON_1024.spec_ref)
     end
 end
