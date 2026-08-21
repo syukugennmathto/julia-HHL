@@ -1,3 +1,4 @@
+using Statistics, Random
 # test_keygen.jl -- key generation (module 6 completed with module 7's sampler).
 #
 # The random stream is derived from a short label via SHAKE256 rather than
@@ -57,7 +58,11 @@
     @testset "ntru_gen against the reference" begin
         for (n, label, used, wf, wg, wF, wG) in NTRU_GEN_KAT
             rb = ReplayBytes(shake256(codeunits(label), used))
-            f, g, F, G = ntru_gen(n, rb)
+            # `sampler = :spec` selects the specification's gen_poly.  This
+            # branch defaults to the C reference's CDT sampler, which produces
+            # the same distribution by a different route and so cannot
+            # reproduce a recorded vector (README.md, docs/debug_log.md #043).
+            f, g, F, G = ntru_gen(n, rb; sampler = :spec)
             @test f == wf
             @test g == wg
             @test F == wF
@@ -104,5 +109,77 @@
         rb = ReplayBytes(shake256(codeunits("genpoly-8"), 70001))
         @test_throws ArgumentError gen_poly(4096, rb)
         @test_throws ArgumentError gen_poly(3, rb)
+    end
+
+    @testset "the CDT sampler: same distribution, different realisation" begin
+        # THIS BRANCH's default sampler (docs/debug_log.md #043).  It cannot be
+        # checked against a recorded vector -- that is the whole point of the
+        # divergence -- so it is checked against the distribution it is supposed
+        # to have, and against the constraints it is supposed to enforce.
+
+        rng = MersenneTwister(20260827)
+
+        # 1. The table is the one the C reference carries, and it says what its
+        #    header says: entry 0 is P(x = 0), entry k is P(x >= k+1 | x > 0),
+        #    scaled by 2^63, for sigma = 1.17*sqrt(q/(2*1024)).
+        @test length(GAUSS_1024_12289) == 27
+        @test GAUSS_1024_12289[end] == 0            # the table terminates
+        @test issorted(GAUSS_1024_12289[2:end]; rev = true)
+        let top = big(2)^63, sigma = 1.17 * sqrt(Q / 2048)
+            p0 = Float64(GAUSS_1024_12289[1] / top)
+            # P(x=0) for a discrete Gaussian of this width
+            norm = sum(exp(-k^2 / (2 * sigma^2)) for k in -60:60)
+            @test isapprox(p0, 1 / norm; rtol = 1e-3)
+            # P(x=1 | x>0) follows from the same distribution
+            p1given = 1 - Float64(GAUSS_1024_12289[2] / top)
+            want = exp(-1 / (2 * sigma^2)) /
+                   sum(exp(-k^2 / (2 * sigma^2)) for k in 1:60)
+            @test isapprox(p1given, want; rtol = 1e-3)
+        end
+
+        # 2. Summing 2^(10-logn) draws gives the specification's sigma_fg, which
+        #    is what makes this a *different route to the same distribution*
+        #    rather than a different distribution.
+        for n in (512, 1024)
+            src = bytesource(chacha20(collect(UInt8, 0x20:0x57)))
+            v = Int[]
+            for _ in 1:30
+                append!(v, Int.(gen_poly_cdt(n, src)))
+            end
+            want = SIGMA_FG_BASE * sqrt(4096 / n)
+            @test isapprox(std(v), want; rtol = 0.05)
+            @test abs(mean(v)) < 0.2
+            @test all(c -> -127 <= c <= 127, v)      # fits the key format's byte
+        end
+
+        # 3. The constraint the specification's sampler does *not* impose: the
+        #    coefficient sum is odd, so Res(f, x^n+1) is odd and the binary GCD
+        #    at the bottom of the descent cannot fail on a factor of two.
+        let src = bytesource(chacha20(collect(UInt8, 0x60:0x97)))
+            for _ in 1:50
+                @test isodd(sum(Int.(gen_poly_cdt(512, src))))
+            end
+        end
+
+        # 4. `sampler = :spec` still selects the specification's route, which is
+        #    what keeps the recorded vectors above meaningful.
+        @test_throws ArgumentError ntru_gen(8, ReplayBytes(zeros(UInt8, 8)); sampler = :nope)
+        let n = 8
+            rb1 = ReplayBytes(shake256(codeunits("sampler/spec"), 1 << 18))
+            rb2 = ReplayBytes(shake256(codeunits("sampler/spec"), 1 << 18))
+            a = ntru_gen(n, rb1; sampler = :spec)
+            b = ntru_gen(n, rb2; sampler = :spec)
+            @test a == b                              # deterministic
+            @test ntru_equation_holds(a[1], a[2], a[3], a[4])
+        end
+
+        # 5. Keys from the fast path are real keys.
+        let src = bytesource(chacha20(collect(UInt8, 0xa0:0xd7)))
+            f, g, F, G = ntru_gen(512, src)
+            @test ntru_equation_holds(f, g, F, G)
+            @test gs_norm_ok(Float64.(f), Float64.(g))
+            @test is_invertible_zq(Int.(f))
+            @test isodd(sum(Int.(f))) && isodd(sum(Int.(g)))
+        end
     end
 end

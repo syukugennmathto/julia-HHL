@@ -63,6 +63,7 @@ export set_fft_roots!, reset_fft_roots!, with_fft_roots
 export karamul, galois_conjugate, field_norm, lift, bitsize
 export ntru_solve, NTRUSolveFailure, ntru_equation_residual, ntru_equation_holds
 export gs_norm, gs_norm_ok, gen_poly, ntru_gen, SIGMA_FG_MIN
+export mkgauss, gen_poly_cdt, GAUSS_1024_12289   # branch variant, see README
 
 # --- module 7 --------------------------------------------------------------
 export samplerz, basesampler, approxexp, berexp

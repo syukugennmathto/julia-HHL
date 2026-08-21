@@ -24,7 +24,9 @@
 # Rebuild a key and its normalised tree from a recorded label.
 function _tree_from_label(n, label, used, sigma)
     rb = ReplayBytes(shake256(codeunits(label), used))
-    f, g, F, G = ntru_gen(n, rb)
+    # `:spec` -- these vectors were recorded against the specification's
+    # sampler, and this branch's default is a different one (README.md).
+    f, g, F, G = ntru_gen(n, rb; sampler = :spec)
     B = Matrix{Vector{ComplexF64}}(undef, 2, 2)
     B[1, 1] = fft(Float64.(g)); B[1, 2] = fft(Float64.(-f))
     B[2, 1] = fft(Float64.(G)); B[2, 2] = fft(Float64.(-F))

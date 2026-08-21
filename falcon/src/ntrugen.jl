@@ -737,6 +737,150 @@ function gen_poly(n::Integer, randombytes)
     return f
 end
 
+# ---------------------------------------------------------------------------
+# The C reference's Gaussian sampler for f and g  (THIS BRANCH ONLY)
+# ---------------------------------------------------------------------------
+#
+# `gen_poly` above follows the specification and the Python reference: draw 4096
+# values from `samplerz` at `SIGMA_FG_BASE` and fold them 4096/n at a time.  It
+# is correct and it is expensive -- 4096 runs of a rejection sampler with an
+# exponential in it, per polynomial, and roughly nine candidate (f, g) pairs are
+# thrown away per accepted key.
+#
+# The C reference gets the *same distribution* a different way: a cumulative
+# distribution table for the n = 1024 Gaussian, summed `2^(10-logn)` times.  At
+# n = 512 that is 1024 table draws instead of 4096 rejection-sampler runs.
+#
+# The distributions really are the same, which is worth checking rather than
+# assuming.  C's table is for `sigma = 1.17*sqrt(q/(2N))` with N = 1024, i.e.
+# 2.866; summing `2^(10-logn)` of them gives `2.866 * sqrt(2^(10-logn))`.  Ours
+# is `SIGMA_FG_BASE * sqrt(4096/n)` = `1.433 * sqrt(4096/n)`.  At n = 1024 both
+# are 2.866; at n = 512 both are 4.0538.  The test suite asserts this.
+#
+# It also fixes something else.  C forces the sum of the coefficients to be
+# **odd**, so that `Res(f, x^n+1)` is odd and the binary GCD at the bottom of
+# the descent cannot fail on a common factor of 2.  Measured here, a third of
+# all descents were being thrown away on `gcd != 1` without it.
+#
+# [C-ref] keygen.c:2258-2264 (the table's definition and its sigma)
+# [C-ref] keygen.c:2266-2292 (`gauss_1024_12289`, transcribed below)
+# [C-ref] keygen.c:4095-4131 (`mkgauss`, `poly_small_mkgauss`)
+
+"""
+    GAUSS_1024_12289
+
+Cumulative distribution table for the discrete Gaussian with
+`sigma = 1.17*sqrt(q/(2N))`, `q = 12289`, `N = 1024`, scaled by `2^63`.
+
+Entry 0 is `P(x = 0)`.  For `k > 0`, entry `k` is `P(x >= k+1 | x > 0)`.
+
+Transcribed from the C reference, not derived: these are 27 exact 63-bit
+integers and re-deriving them would introduce rounding differences.
+[C-ref] keygen.c:2266-2292
+"""
+const GAUSS_1024_12289 = UInt64[
+    0x11d137d82df2ab58, 0x590c40f63ff5f974, 0x3898e41d85b975b7,
+    0x20a964ef50858ff9, 0x1107d1ae973857eb, 0x07fe1ec29220ea37,
+    0x035dafcacd37a439, 0x0144d98306216d42, 0x006d6beeeaf81655,
+    0x0020e1a00d6fa84c, 0x0008cdddcd9dda9c, 0x0002192fc3dcdcb4,
+    0x000071dfcd3c57e9, 0x00001574938d76eb, 0x000003974b0c33e5,
+    0x000000889d3da6fe, 0x0000001204ddc6cb, 0x000000021bd3b27a,
+    0x0000000038091f5e, 0x0000000005287db0, 0x00000000006bc528,
+    0x000000000007cbfb, 0x0000000000007ffc, 0x0000000000000746,
+    0x000000000000005e, 0x0000000000000004, 0x0000000000000000
+]
+
+"""
+    mkgauss(randombytes, logn) -> Int
+
+One coefficient of `f` or `g`, distributed as the sum of `2^(10-logn)` draws
+from [`GAUSS_1024_12289`](@ref).
+
+Each draw consumes two 64-bit words, little-endian, exactly as the C reference
+does: the first supplies the sign and decides whether the value is zero, the
+second indexes into the table.
+
+CONSTANT TIME: the C reference scans the whole table every draw and combines
+with masks precisely so the running time does not depend on the value sampled.
+That is reproduced here -- the loop has no early exit -- but Julia gives no
+guarantee that `ifelse` compiles to a branch-free select, so this is *shaped*
+like constant-time code without being it.  The distinction matters: `f` and `g`
+are the secret key.
+
+[C-ref] keygen.c:4095-4131 (`mkgauss`)
+"""
+function mkgauss(randombytes, logn::Integer)
+    g = 1 << (10 - Int(logn))
+    val = 0
+    for _ in 1:g
+        b = randombytes(8)
+        r = UInt64(0)
+        @inbounds for i in 1:8
+            r |= UInt64(b[i]) << (8 * (i - 1))
+        end
+        neg = Int(r >> 63)
+        r &= ~(UInt64(1) << 63)
+        # `f` becomes 1 when the value is zero, i.e. when r < table[0].
+        fl = r < @inbounds(GAUSS_1024_12289[1])
+
+        b = randombytes(8)
+        r = UInt64(0)
+        @inbounds for i in 1:8
+            r |= UInt64(b[i]) << (8 * (i - 1))
+        end
+        r &= ~(UInt64(1) << 63)
+        v = 0
+        @inbounds for k in 2:length(GAUSS_1024_12289)
+            t = r >= GAUSS_1024_12289[k]
+            v = ifelse(t & !fl, k - 1, v)      # first k with r >= table[k]
+            fl |= t
+        end
+        val += neg == 1 ? -v : v
+    end
+    return val
+end
+
+"""
+    gen_poly_cdt(n, randombytes) -> Vector{BigInt}
+
+`f` or `g`, sampled with [`mkgauss`](@ref) rather than by folding `samplerz`.
+
+Two constraints from the C reference are enforced by resampling the offending
+coefficient:
+
+  * `|c| <= 127`, so the coefficient fits the byte the key format stores it in;
+  * the **sum of all coefficients is odd**, which makes `Res(f, x^n+1)` odd and
+    stops the binary GCD at the bottom of the descent failing on a factor of 2.
+
+The second is the interesting one: without it, a third of all descents here
+were being discarded on `gcd != 1`.
+
+[C-ref] keygen.c:4095-4131 (`poly_small_mkgauss`)
+"""
+function gen_poly_cdt(n::Integer, randombytes)
+    ni = Int(n)
+    logn = trailing_zeros(ni)
+    (1 << logn) == ni || throw(ArgumentError("n must be a power of two, got $ni"))
+    logn <= 10 || throw(ArgumentError("gen_poly_cdt is defined for n <= 1024"))
+    f = Vector{BigInt}(undef, ni)
+    mod2 = 0
+    for u in 1:ni
+        while true
+            s = mkgauss(randombytes, logn)
+            (-127 <= s <= 127) || continue
+            if u == ni
+                # the last coefficient must make the total odd
+                (mod2 ⊻ (s & 1)) == 0 && continue
+            else
+                mod2 ⊻= (s & 1)
+            end
+            f[u] = s
+            break
+        end
+    end
+    return f
+end
+
 """
     ntru_gen(n, randombytes; q = Q, max_attempts = 1000) -> (f, g, F, G)
 
@@ -767,13 +911,37 @@ CONSTANT TIME: key generation is the one part of FALCON where variable time is
 broadly accepted -- it runs once, and its timing does not correlate with any
 per-message secret. The rejection loop above is proudly data-dependent.
 """
-function ntru_gen(n::Integer, randombytes; q::Integer = Q, max_attempts::Integer = 1000)
+function ntru_gen(n::Integer, randombytes; q::Integer = Q, max_attempts::Integer = 1000,
+                 sampler::Symbol = :cdt)
+    # THIS BRANCH defaults to the C reference's CDT sampler rather than the
+    # specification's fold of `samplerz`.  Same distribution, different
+    # realisation; see `gen_poly_cdt` and README.md.
+    #
+    # `sampler = :spec` selects the specification's `gen_poly`, and with it this
+    # function still reproduces the Python reference's (f, g, F, G) byte for
+    # byte -- which is what the reference-comparison tests use.  Keeping both
+    # reachable is the point: the fast path is checked by properties, and the
+    # slow path keeps the recorded vectors meaningful.
+    gen = if sampler === :cdt
+        gen_poly_cdt
+    elseif sampler === :spec
+        gen_poly
+    else
+        throw(ArgumentError("sampler must be :cdt or :spec, got :$sampler"))
+    end
     for _ in 1:max_attempts
-        f = gen_poly(n, randombytes)
-        g = gen_poly(n, randombytes)
+        f = gen(n, randombytes)
+        g = gen(n, randombytes)
 
+        # The cheap test first, as the C reference does: if the plain squared
+        # norm of (f, g) already exceeds the bound then the Gram-Schmidt norm
+        # certainly does, and the FFT that `gs_norm` would run is wasted.  Same
+        # predicate, in two stages.  [C-ref] keygen.c:4238-4243
+        fi = Int.(f); gi = Int.(g)
+        plain = sum(abs2, fi) + sum(abs2, gi)
+        plain >= 16823 && continue
         gs_norm(Float64.(f), Float64.(g); q = q) > gram_schmidt_quality()^2 * q && continue
-        is_invertible_zq(Int.(f)) || continue
+        is_invertible_zq(fi) || continue
 
         try
             F, G = ntru_solve(f, g; q = q)

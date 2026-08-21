@@ -193,9 +193,9 @@ publish `h = g/f mod q`.
 
 [Py-ref] scripts/pyref/falcon.py:357-390 (`keygen`)
 """
-function falcon_keygen(n::Integer, randombytes)
+function falcon_keygen(n::Integer, randombytes; sampler::Symbol = :cdt)
     p = params(n)
-    f, g, F, G = ntru_gen(n, randombytes; q = p.q)
+    f, g, F, G = ntru_gen(n, randombytes; q = p.q, sampler = sampler)
     sk = expand_privkey(Int.(f), Int.(g), Int.(F), Int.(G), p)
     fq = Int[mod(c, p.q) for c in f]
     gq = Int[mod(c, p.q) for c in g]
