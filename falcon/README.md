@@ -190,6 +190,10 @@ docs/
   refs.md               **一次資料の所在と、どの主張がどれに拠るかの対応表**
   constant_time.md      **脅威モデル・変時間箇所の棚卸し・dudect による実測**
   why_julia.md          **なぜ Julia を選び、その見立てがどこで外れたか**
+  paper_outline.md      論文の骨組み（主張を 1 本に絞る）
+  related_work_prompt.md  関連研究調査用プロンプト（**投稿前の最優先項目**）
+  nist_comment_draft.md   NIST への意見の下書き（FIPS 206 の IPD 待ち）
+  deep_research_prompts.md 一次資料入手用プロンプト
   build_cref_macos.md   C 参照実装を dylib にする手順（macOS / Apple Silicon）
   benchmarks.md         C 版との速度対決の生データと再現手順
   math/                 数学的背景（原稿素材）
