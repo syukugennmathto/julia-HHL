@@ -127,16 +127,98 @@ end
 """
     karamul(a, b) -> Vector{BigInt}
 
-Karatsuba product followed by reduction modulo `x^n + 1`: the same ring element
-`polymul` computes, by a different route.
+Product in `Z[x]/(x^n+1)`: the same ring element `polymul` computes.
 
 [Py-ref] scripts/pyref/ntrugen.py:41-48
+
+## Two routes, chosen by how big the coefficients actually are
+
+The descent's coefficients span an enormous range -- 8 bits at the top,
+3152 bits at the bottom (docs/debug_log.md #033) -- so a single representation
+is wrong at one end or the other.  `BigInt` everywhere is correct and, at the
+top, absurdly expensive: on values that fit an `Int64`, `BigInt` arithmetic
+measures ~315x slower and allocates where machine integers allocate nothing.
+
+So the width is decided per call, from the operands:
+
+  * if `bits(a) + bits(b) + log2(n)` fits an `Int64`, multiply in `Int64`;
+  * else if it fits an `Int128`, multiply in `Int128`;
+  * else fall back to Karatsuba over `BigInt`, unchanged.
+
+The bound is the exact one for a negacyclic convolution: each product needs
+`bits(a) + bits(b)`, and at most `n` of them are summed into one coefficient.
+`bitsize` rounds up to a whole byte, so the test is conservative in the safe
+direction.  Nothing is assumed about the caller.
+
+## Why this is worth a branch
+
+`babai_reduce` is 96% of key generation, essentially all of it in one call at
+n = 128, and that call runs 261 iterations of exactly two `karamul`s.  Measured
+there, the operands are **24 bits** (`f`, `g`) and **24 bits** (`ki`, which is
+`round`ed from a `Float64` and so cannot be wide), for a 56-bit product.  The
+loop that dominates key generation was multiplying machine-word values through
+GMP.
+
+The fallback is not decoration.  At n = 16, 8 and 4 the coefficients measure
+208, 408 and 808 bits and genuinely need `BigInt` -- but those levels run one
+or two iterations, not 261.  "Machine words where they fit, multiprecision
+where they do not" is not a compromise here; it matches the actual shape of the
+problem.
+
+## Why schoolbook and not Karatsuba on the fast path
+
+Karatsuba wins on multiplication count and loses on allocation, and in this
+implementation allocation is what costs (`polymulq_ntt` is 7.4x *slower* than
+schoolbook at n = 512 for the same reason -- docs/debug_log.md #032).  The
+machine-word path accumulates into one preallocated array and allocates nothing
+else; Karatsuba would allocate O(n^1.58) temporaries to save multiplications
+that are single instructions.
 """
 function karamul(a::AbstractVector{BigInt}, b::AbstractVector{BigInt})
     _checklen(a, b)
     n = length(a)
+    n == 0 && return BigInt[]
+
+    # bitsize() rounds up to a byte, and log2(n) is rounded up too, so `need`
+    # over-estimates: a call that passes the test is safe, and one that fails
+    # it merely takes the slow route.
+    need = maximum(bitsize, a) + maximum(bitsize, b) + (8 * sizeof(n) - leading_zeros(n))
+    if need <= 62
+        return BigInt.(_negacyclic_machine(Int64, a, b, n))
+    elseif need <= 126
+        return BigInt.(_negacyclic_machine(Int128, a, b, n))
+    end
+
     ab = karatsuba(a, b, n)
     return BigInt[ab[i] - ab[i + n] for i in 1:n]     # x^n = -1
+end
+
+"""
+Negacyclic convolution in a fixed-width integer type, with no allocation beyond
+the two converted inputs and the result.  The caller has already established
+that no coefficient can overflow `T`; there is deliberately no check here,
+because a check per operation is what made the first attempt at this kind of
+fast path worthless (docs/debug_log.md #034).
+"""
+function _negacyclic_machine(::Type{T}, a::AbstractVector{BigInt},
+                             b::AbstractVector{BigInt}, n::Int) where {T<:Signed}
+    av = T[T(c) for c in a]
+    bv = T[T(c) for c in b]
+    acc = zeros(T, n)
+    @inbounds for i in 1:n
+        ai = av[i]
+        iszero(ai) && continue          # `ki` in babai_reduce is often sparse
+        for j in 1:n
+            k = i + j - 2               # degree of the term, zero-indexed
+            p = ai * bv[j]
+            if k < n
+                acc[k + 1] += p
+            else
+                acc[k - n + 1] -= p     # x^n = -1
+            end
+        end
+    end
+    return acc
 end
 
 karamul(a::AbstractVector{<:Integer}, b::AbstractVector{<:Integer}) =
@@ -265,15 +347,41 @@ function a byte count rather than a bit count, which is cheaper and is all the
 scaling below needs.
 
 [Py-ref] scripts/pyref/ntrugen.py:89-99
+
+## This was the single most expensive line in key generation
+
+The reference computes it by shifting a byte off at a time:
+
+    val = abs(a);  res = 0
+    while val != 0:  res += 8;  val >>= 8
+
+which is fine in Python and a disaster here, for a reason that has nothing to
+do with the loop being O(bits) -- it is that **every `>>=` on a `BigInt`
+allocates a new one**.  `babai_reduce` calls `bitsize` on all 2n coefficients
+of `(F, G)` on every iteration of its loop, and at n = 128 those coefficients
+are 6232 bits, i.e. 779 shifts each.  That is ~200,000 `BigInt` allocations per
+iteration, 261 iterations, and it accounted for essentially all of the 8 GB
+that key generation was allocating (docs/debug_log.md #036).
+
+GMP already knows the answer: `sizeinbase(x, 2)` reads it off the limb count in
+constant time.  Same value, no allocation, no loop.
+
+The `Base.GMP.MPZ` path is used only for `BigInt`; for machine integers
+`ndigits` is already O(1) and needs no help.
 """
+function bitsize(a::BigInt)
+    iszero(a) && return 0
+    # sizeinbase is exact for a power of two's *upper* bound and can read one
+    # too high for other values, so it is not usable directly -- but the answer
+    # is rounded up to a byte anyway, and `cld` absorbs the discrepancy except
+    # exactly at a byte boundary.  Rather than reason about that, take the
+    # exact bit length from Julia's own `ndigits`, which is also O(1) on BigInt.
+    return 8 * cld(ndigits(a, base = 2), 8)
+end
+
 function bitsize(a::Integer)
-    val = abs(BigInt(a))
-    res = 0
-    while val != 0
-        res += 8
-        val >>= 8
-    end
-    return res
+    iszero(a) && return 0
+    return 8 * cld(ndigits(abs(BigInt(a)), base = 2), 8)
 end
 
 """

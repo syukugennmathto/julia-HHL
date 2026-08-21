@@ -1,4 +1,5 @@
 using Test
+using Random
 using Falcon
 
 # --- small helpers shared by the test files ---------------------------------

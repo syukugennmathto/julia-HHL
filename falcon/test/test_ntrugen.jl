@@ -43,6 +43,52 @@
         @test karamul(BigInt[0, 1], BigInt[0, 1]) == BigInt[-1, 0]   # x*x = -1
     end
 
+    @testset "karamul: machine-word path agrees with the BigInt path" begin
+        # Regression test for docs/debug_log.md #036.  karamul now multiplies in
+        # Int64 or Int128 when the operands provably fit, and falls back to
+        # Karatsuba over BigInt otherwise.  The widths below are chosen to land
+        # on *both* sides of both thresholds, including exactly at them -- a
+        # test that only used small coefficients would never execute the
+        # fallback, and one that only used large ones would never execute the
+        # fast path.
+        rng = MersenneTwister(20260821)
+        function viaKaratsuba(a, b)
+            n = length(a)
+            ab = Falcon.karatsuba(a, b, n)
+            return BigInt[ab[i] - ab[i + n] for i in 1:n]
+        end
+
+        widths_seen = Set{Symbol}()
+        for n in (1, 2, 4, 8, 16, 64, 128), bits in (1, 4, 24, 26, 27, 28, 58, 62, 100, 126, 200, 900)
+            a = BigInt[rand(rng, -(BigInt(2)^bits):(BigInt(2)^bits)) for _ in 1:n]
+            b = BigInt[rand(rng, -(BigInt(2)^bits):(BigInt(2)^bits)) for _ in 1:n]
+            got = karamul(a, b)
+            # Two independent oracles: Karatsuba over BigInt (the old code path,
+            # still reachable) and poly.jl's schoolbook convolution.
+            @test got == viaKaratsuba(a, b)
+            @test got == polymul(a, b)
+
+            need = maximum(bitsize, a) + maximum(bitsize, b) +
+                   (8 * sizeof(n) - leading_zeros(n))
+            push!(widths_seen, need <= 62 ? :int64 : need <= 126 ? :int128 : :bigint)
+        end
+        # The point of the widths above: assert that all three paths ran.  If a
+        # future change to the thresholds quietly stops exercising one of them,
+        # this fails rather than the coverage silently vanishing.
+        @test widths_seen == Set([:int64, :int128, :bigint])
+
+        # The hot shape from babai_reduce at n = 128: 24-bit operands.  This is
+        # the case the fast path exists for.
+        f = BigInt[rand(rng, -(BigInt(2)^24):(BigInt(2)^24)) for _ in 1:128]
+        k = BigInt[rand(rng, -(BigInt(2)^24):(BigInt(2)^24)) for _ in 1:128]
+        @test karamul(f, k) == viaKaratsuba(f, k)
+        # ... and a sparse `k`, which the fast path skips over
+        ksparse = BigInt[iszero(i % 7) ? k[i] : BigInt(0) for i in 1:128]
+        @test karamul(f, ksparse) == viaKaratsuba(f, ksparse)
+
+        @test karamul(BigInt[], BigInt[]) == BigInt[]
+    end
+
     @testset "tower operations against the reference" begin
         for (a, wconj, wnorm, wlift) in TOWER_OPS
             @test galois_conjugate(a) == wconj
@@ -88,6 +134,39 @@
             @test bitsize(a) == bitsize(-a)
             @test bitsize(a) >= (a == 0 ? 0 : ndigits(abs(BigInt(a)); base = 2))
             @test bitsize(a) < ndigits(abs(BigInt(a)); base = 2) + 8
+        end
+
+        # Regression test for docs/debug_log.md #036.  bitsize used to be the
+        # reference's shift-a-byte-off-at-a-time loop, which on a BigInt
+        # allocates once per shift and was responsible for essentially all of
+        # key generation's 8 GB.  It is now read from the limb count in O(1).
+        # The oracle here is that original definition, kept verbatim, because
+        # the replacement has to agree with it *exactly* -- the value feeds a
+        # shift amount, so being one byte out silently changes the arithmetic
+        # rather than failing.
+        bitsize_ref(a::Integer) = begin
+            val = abs(BigInt(a)); res = 0
+            while val != 0; res += 8; val >>= 8; end
+            res
+        end
+        # exhaustive across a range crossing many byte boundaries
+        @test all(a -> bitsize(a) == bitsize_ref(a), -600:600)
+        # every power of two and its neighbours -- the boundary cases, and
+        # where an off-by-one in a rounded-up bit count would hide
+        @test all(e -> (v = BigInt(2)^e;
+                        bitsize(v) == bitsize_ref(v) &&
+                        bitsize(v - 1) == bitsize_ref(v - 1) &&
+                        bitsize(v + 1) == bitsize_ref(v + 1) &&
+                        bitsize(-v) == bitsize_ref(-v)), 0:600)
+        # the width babai_reduce actually meets at n = 128
+        let v = BigInt(2)^6232 - 12345
+            @test bitsize(v) == bitsize_ref(v) == 6232
+        end
+        # machine integer types, including the extremes
+        for T in (Int8, Int16, Int32, Int64, Int128)
+            @test bitsize(typemax(T)) == bitsize_ref(typemax(T))
+            @test bitsize(typemin(T)) == bitsize_ref(typemin(T))
+            @test bitsize(zero(T)) == 0
         end
     end
 
