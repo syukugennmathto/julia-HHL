@@ -35,11 +35,14 @@ Heuristic 1 directly (which it does not), confirm the effect at n = 1024, and
 **explain the asymmetry it left open** — why the last two sampler calls diverge
 far more readily than the first two — as a perturbation that accumulates along
 the tree descent, 32× larger at the last two calls than the first two. We also
-implement and evaluate that paper's own proposed countermeasure, and find that
-the half of it an implementer can actually deploy today — rounding instead of
-flooring, since the reference key generator cannot produce the odd
-`‖(g,−f)‖²` the other half requires — immunises only the *harmless* sampler
-positions and leaves every full-key-recovery position exposed. Performance: this
+implement and evaluate that paper's own proposed countermeasure, and **break the
+half of it that an implementer can actually deploy today**: because the
+reference key generator cannot produce the odd `‖(g,−f)‖²` the second half
+requires, only the rounding sampler ships — and since `q = 12289` is odd while
+`‖(g,−f)‖²` is always even, rounding immunises exactly the *harmless* sampler
+positions and leaves every full-key-recovery position exposed. With that
+countermeasure in place we still recover the private key, from 3 of 3 divergent
+pairs found in 160000 signatures, at an unchanged rate of 1.9 × 10⁻⁵. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -156,12 +159,12 @@ for this particular question.
    Antrag and HAWK, the sensitivity requires both floating point in the signing
    sampler and a small-denominator rational centre — Falcon alone has both, so
    the hazard is specific to its design, not generic to lattice hash-and-sign.
-7. **An evaluation of the proposed countermeasure** (§7.1): we implement
-   ePrint 2024/1709's Algorithm 4, confirm it is distributionally sound, verify
-   the rational structure of the centres directly, and show that because
-   `q = 12289` is odd while the reference's `‖(g,−f)‖²` is always even, the
-   deployable half of the countermeasure removes only the exposure that does not
-   lead to key recovery.
+7. **A break of the deployable countermeasure** (§7.1): we implement ePrint
+   2024/1709's Algorithm 4, confirm it is distributionally sound (χ²), verify
+   the rational structure of the centres directly, and then recover private keys
+   *with the countermeasure running* — 3 of 3 divergent pairs, at an unchanged
+   1.9 × 10⁻⁵ — because `q` is odd while the reference's `‖(g,−f)‖²` is always
+   even, so rounding immunises only the harmless positions.
 
 We are equally explicit about what is **not** a contribution. The arithmetic
 mechanism (an integer centre passing through `floor`), the fact that the
@@ -712,11 +715,29 @@ end; under `round` without the key-generation change, **all 11 do**. The
 countermeasure does not reduce key-recovery exposure; it concentrates what
 remains onto the positions that matter.
 
-The end-to-end rate agrees. Running the A1 arm with `NewSamplerZ` on reference
-keys gives 2 divergences in 150000 signatures (1.3×10⁻⁵) against the `floor`
-baseline's 10 in 525000 (1.9×10⁻⁵) — statistically indistinguishable.
+**(iv) The countermeasure, as deployable, does not prevent key recovery.** We
+ran the whole attack against it (`scripts/countermeasure_break.jl`): sign with
+`NewSamplerZ` on reference keys, look for a half-integer straddle at the last
+two calls, and when one occurs run §5.1's recovery. Over 160000 signatures, 29
+centres came within 10⁻¹² of a half-integer, **3 produced divergent signature
+pairs, and all 3 yielded the private key** — each verified to be exactly the
+stored key up to the NTRU lattice's symmetries (`x²⁵⁶(f,g)`, `x⁰(f,g)`,
+`−x²⁵⁶(f,g)`):
 
-**We could not break the full countermeasure.** With `t = ‖(g,−f)‖²` odd,
+```
+DIVERGENCE key 20 sig  562 : 909 of 1024 coefficients differ
+   *** KEY RECOVERED *** (a,b)=(-1,0)  = x^256 (f,g)
+DIVERGENCE key 41 sig 1346 : 900 of 1024 coefficients differ
+   *** KEY RECOVERED *** (a,b)=(-1,0)  = x^0 (f,g)
+DIVERGENCE key 82 sig 1054 : 936 of 1024 coefficients differ
+   *** KEY RECOVERED *** (a,b)=(-2,0)  = -x^256 (f,g)
+```
+
+The end-to-end rate is unchanged: 3 in 160000 (1.9×10⁻⁵) with the countermeasure
+deployed, against the `floor` baseline's 10 in 525000 (1.9×10⁻⁵).
+
+**The full countermeasure is sound; it is the deployable half that is not.**
+With `t = ‖(g,−f)‖²` odd,
 `m₂ = t² − 2u²` and `m₃ = t³ − 2t(u²+v²+w²) + 2u(v−w)²` are odd as well
 (odd − even = odd), so all six in-precision denominators are odd and half-integer
 centres cannot occur anywhere; that argument is sound. The gap is one of
@@ -1034,6 +1055,7 @@ runs unless a measurement asks otherwise.
 | countermeasure, distribution (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl chisq` |
 | countermeasure, rate (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl rate A1 100 1500 1 out.txt` |
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
+| **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
