@@ -65,10 +65,12 @@ default on 12 of 100000 signatures, and 8 of those 12 pairs yield the private
 key**, each an exact NTRU symmetry of the stored one. The remaining 4 are
 divergences at the first two calls — the channel above — and the result
 replicates at n = 1024. `-Ofast` and `-ffast-math` imply the flag. The negative
-control matters as much: eight ordinary configurations — two compilers, native
+control matters as much: nine ordinary configurations — two compilers, native
 against emulated floating point, baseline against `-march=native`, and the
-reference's separate AVX2 code path — are byte-identical over 30000 signatures,
-so the hazard is *one flag*, not build variation in general. What protects the
+reference's separate hand-vectorised AVX2 code path — are byte-identical over
+30000 signatures, so the hazard is *one flag*, not build variation in general.
+Contracting the vector path instead of the scalar one produces a *third*
+mutually inconsistent stream. What protects the
 reference at both compilers' defaults turns out to be the `fpr` struct wrapper,
 introduced for type safety, whose FP_CONTRACT-blocking effect is documented
 nowhere. Performance: this
@@ -988,14 +990,30 @@ signatures each:
 | `clang -O2` native double | |
 | `clang` AVX2 code path | |
 | `clang -O2` emulated FP | |
-| `clang -O2 -march=native -ffp-contract=fast` | **differs from all eight** |
+| `gcc` AVX2 path with `-ffp-contract=fast` | |
+| `clang -O2 -march=native -ffp-contract=fast` | **a second stream** |
+| `clang` AVX2 path with `-ffp-contract=fast` | **a third stream** |
 
 Two compilers, native against emulated floating point, baseline against
-`-march=native`, and the reference's separate AVX2 implementation of the FFT —
-all agree bit for bit. The emulated build agreeing with the native one is worth
-noting on its own: the reference's `config.h` recommends emulation *because*
-native FPUs "may yield slight discrepancies that could affect determinism", and
-on this platform they do not. The whole divergence is one flag.
+`-march=native`, and the reference's separate hand-vectorised AVX2
+implementation of the FFT — all agree bit for bit. (We checked that the AVX2
+builds really contain the vector path rather than silently falling back: 599
+`ymm` instructions under GCC and 4321 under clang.) The emulated build agreeing
+with the native one is worth noting on its own: the reference's `config.h`
+recommends emulation *because* native FPUs "may yield slight discrepancies that
+could affect determinism", and on this platform they do not. The whole
+divergence is one flag.
+
+Two details sharpen that. GCC does not contract the AVX2 intrinsics either, even
+when asked (`-ffp-contract=fast`, 0 fma instructions emitted), so its default
+build and its contracted build of the vector path are the same program. Clang
+does (118 fma instructions) — and the result is a **third** signature stream,
+distinct from both the default and from clang's contracted *scalar* build. Over
+30000 signatures, scalar-contracted and vector-contracted each diverge from the
+default on five messages, sharing four of them and each having one of its own.
+So this is not "the reference and a broken build": it is three mutually
+inconsistent conforming builds, and which messages leak depends on which code
+path the compiler chose to contract.
 
 **It replicates at FALCON-1024**: 6 of 60000, rate 1.0 × 10⁻⁴, with both builds
 again producing the identical key from the identical seed.

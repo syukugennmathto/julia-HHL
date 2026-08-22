@@ -168,7 +168,7 @@
   <span class="eyebrow">要旨</span>
   <p>FALCON ― NIST が FN-DSA として標準化する格子署名 ― は、選定された署名の中で唯一、出力が浮動小数点演算の関数になる。しかも仕様書の精度解析は、サンプラが出力する<em>分布</em>についてのものであって、二つの適合実装が同じバイト列を返すかどうかについてではない。我々は仕様書だけを読んで Julia で独立実装を書き、参照実装の署名を<strong>バイト単位で再現</strong>するまで突き合わせた。その突き合わせが、仕様書が中間値を決めていない箇所を 3 クラス炙り出す ― <em>演算の書き方</em>、<em>公開パラメータから導けない定数</em>、<em>使われているのに印字されていない ε</em>。</p>
   <p>そのうち二つの書き方 ― 複素除算と <span class="mono">LDL*</span> の <span class="mono">D11</span> ― は署名を 40 万本あたり 3 本、率にして 7.5×10⁻⁶ で変える。しかも必ず最後の 2 回のサンプラ呼び出し、すなわち ePrint 2024/1709（Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025）が 1 ペアから秘密鍵の全復元に使う位置で。同論文が扱う摂動と違い、これは<em>仕様書</em>と<em>参照実装</em>の差であり、参照実装の両 signing mode に共通に存在し、同論文の対策では塞がらない。我々は同論文の機構を別経路から追認し、同論文が測っていない Heuristic 1 を直接検証する。</p>
-  <p>さらに二つの結果は、同論文が「使えない」として脇に置いた<strong>最初の 2 回</strong>に関わる。第一に、最初の 2 回の中心は厳密に <span class="mono">(c·f)[n/2−1] / q</span>、すなわち<em>秘密についての公開線形形式</em>である。だからそこでの整数中心は <span class="mono">F_q</span> 上の方程式 1 本にほかならず、<span class="mono">n−1</span> 個の<em>事象</em>を集めれば、差ベクトルも格子簡約も使わずにガウス消去だけで秘密鍵が戻る ― 実際に走らせた。第二に、そのチャネルが必要とするオラクルは、摂動の大きさについての<strong>両側の窓</strong>の中にだけ存在する。窓の両端を実測した。本稿自身の「書き方の差」は窓の<em>下</em>にある。しかし最適化オプション一つが窓の<em>中</em>に落ちる ― <span class="mono">clang -ffp-contract=fast</span> で建てた C 参照実装は、既定で建てた同じ clang と <strong>10 万本中 12 本</strong>で食い違い、<strong>そのうち 8 組から秘密鍵が出る</strong>。普通のビルドの選択 8 通り（2 コンパイラ、native 対 emulated、参照実装自身の AVX2 経路）は全部バイト一致するので、危険なのはビルドのばらつき一般ではなく<strong>旗ひとつ</strong>である。</p>
+  <p>さらに二つの結果は、同論文が「使えない」として脇に置いた<strong>最初の 2 回</strong>に関わる。第一に、最初の 2 回の中心は厳密に <span class="mono">(c·f)[n/2−1] / q</span>、すなわち<em>秘密についての公開線形形式</em>である。だからそこでの整数中心は <span class="mono">F_q</span> 上の方程式 1 本にほかならず、<span class="mono">n−1</span> 個の<em>事象</em>を集めれば、差ベクトルも格子簡約も使わずにガウス消去だけで秘密鍵が戻る ― 実際に走らせた。第二に、そのチャネルが必要とするオラクルは、摂動の大きさについての<strong>両側の窓</strong>の中にだけ存在する。窓の両端を実測した。本稿自身の「書き方の差」は窓の<em>下</em>にある。しかし最適化オプション一つが窓の<em>中</em>に落ちる ― <span class="mono">clang -ffp-contract=fast</span> で建てた C 参照実装は、既定で建てた同じ clang と <strong>10 万本中 12 本</strong>で食い違い、<strong>そのうち 8 組から秘密鍵が出る</strong>。普通のビルドの選択 9 通り（2 コンパイラ、native 対 emulated、参照実装自身の手書き AVX2 経路）は全部バイト一致するので、危険なのはビルドのばらつき一般ではなく<strong>旗ひとつ</strong>である。しかもスカラー経路ではなくベクトル経路を縮約すると、さらに<strong>第 3 の</strong>互いに矛盾する列が出る。</p>
 </div>
 
 <span class="secnum">01 — 問い</span>
@@ -367,7 +367,7 @@ gcc default == clang default : identical over 100000 signatures
 <table>
 <thead><tr><th>ビルド構成</th><th>署名列</th></tr></thead>
 <tbody>
-<tr><td><span class="mono">gcc -O2</span> · native double</td><td rowspan="8" style="vertical-align:middle;"><span class="win">8 通りすべてバイト一致</span></td></tr>
+<tr><td><span class="mono">gcc -O2</span> · native double</td><td rowspan="9" style="vertical-align:middle;"><span class="win">9 通りすべてバイト一致</span></td></tr>
 <tr><td><span class="mono">gcc -O2 -march=native</span></td></tr>
 <tr><td><span class="mono">gcc</span> · 参照実装の AVX2 版 FFT</td></tr>
 <tr><td><span class="mono">gcc -O2</span> · emulated FP</td></tr>
@@ -375,12 +375,16 @@ gcc default == clang default : identical over 100000 signatures
 <tr><td><span class="mono">clang -O2</span> · native double</td></tr>
 <tr><td><span class="mono">clang</span> · AVX2 経路</td></tr>
 <tr><td><span class="mono">clang -O2</span> · emulated FP</td></tr>
-<tr><td><span class="mono">clang -O2 -march=native -ffp-contract=fast</span></td><td><span class="lose">8 通りすべてと食い違う</span></td></tr>
+<tr><td><span class="mono">gcc</span> AVX2 経路 + <span class="mono">-ffp-contract=fast</span></td></tr>
+<tr><td><span class="mono">clang -O2 -march=native -ffp-contract=fast</span> · スカラー</td><td><span class="lose">第 2 の列</span></td></tr>
+<tr><td><span class="mono">clang</span> AVX2 経路 + <span class="mono">-ffp-contract=fast</span></td><td><span class="lose">第 3 の列</span></td></tr>
 </tbody>
 </table>
 </div>
 
-<p>2 コンパイラ、native 対 emulated、baseline 対 <span class="mono">-march=native</span>、そして参照実装が別に持つ AVX2 版 FFT ― 全部ビット一致する。emulated と native が一致することは単独で意味がある: 参照実装の <span class="mono">config.h</span> は「native FPU は determinism に影響しうる差を生む」から emulation を薦めているが、ここでは生まない。発散はすべて旗ひとつに帰属する ― <span class="mono">-Ofast</span> と <span class="mono">-ffast-math</span> のどちらもその旗を含む。</p>
+<p>2 コンパイラ、native 対 emulated、baseline 対 <span class="mono">-march=native</span>、そして参照実装が別に持つ手書きベクトル版 AVX2 FFT ― 全部ビット一致する。（AVX2 ビルドが本当にベクトル経路を含むことも確認した: <span class="mono">ymm</span> 命令が gcc で 599、clang で 4321。）emulated と native が一致することは単独で意味がある: 参照実装の <span class="mono">config.h</span> は「native FPU は determinism に影響しうる差を生む」から emulation を薦めているが、ここでは生まない。発散はすべて旗ひとつに帰属する ― <span class="mono">-Ofast</span> と <span class="mono">-ffast-math</span> のどちらもその旗を含む。</p>
+
+<p>さらに 2 点。GCC は AVX2 の intrinsics も縮約しない ― <span class="mono">-ffp-contract=fast</span> を明示しても fma 命令は 0 ― ので、ベクトル経路の既定ビルドと縮約ビルドは同じプログラムである。clang は縮約し、結果は<strong>第 3 の列</strong>になる。既定とも、clang のスカラー縮約ビルドとも違う: 3 万署名で、2 つの縮約ビルドはそれぞれ既定と 5 本ずつ食い違い、4 本は共通、1 本ずつが固有である。これは「参照実装と壊れたビルド」ではない。<strong>互いに矛盾する適合ビルドが 3 つ</strong>あり、<em>どの</em>メッセージが漏れるかは、コンパイラがたまたまどの経路を縮約したかで決まる。</p>
 
 <div class="note">
 <span class="eyebrow">いま FN-DSA とこれの間に立っているもの</span>

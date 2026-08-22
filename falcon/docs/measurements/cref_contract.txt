@@ -20,6 +20,7 @@ gc_def: 0 fma instructions   [gcc -O2 -march=native]
 cl_fast  privkey fnv 39afef910dae5682
 cl_def  privkey fnv 39afef910dae5682
 gc_def  privkey fnv 39afef910dae5682
+(step 3b re-signs a smaller batch per build; its streams are truncated to match)
 
 ## step 3 -- do the streams agree?
 gcc default == clang default : identical over 100000 signatures
@@ -27,16 +28,28 @@ clang -ffp-contract=fast vs clang default : 12 of 100000 differ (rate 0.00012)
 
 ## step 3b -- the negative control: do ORDINARY build choices diverge?
 30000 signatures per build
-  group 1 (byte-identical): gcc -O2 native, gcc -O2 -march=native, gcc AVX2 path, gcc -O2 emulated FP, gcc -march=native emulated, clang -O2 native, clang AVX2 path, clang -O2 emulated FP
+  group 1 (byte-identical): gcc -O2 native, gcc -O2 -march=native, gcc AVX2 path, gcc -O2 emulated FP, gcc -march=native emulated, clang -O2 native, clang AVX2 path, clang -O2 emulated FP, gcc AVX2 -ffp-contract=fast
   group 2 (byte-identical): clang -ffp-contract=fast
+  group 3 (byte-identical): clang AVX2 -ffp-contract=fast
   gcc -O2 native               vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -O2 native               vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   gcc -O2 -march=native        vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -O2 -march=native        vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   gcc AVX2 path                vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc AVX2 path                vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   gcc -O2 emulated FP          vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -O2 emulated FP          vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   gcc -march=native emulated   vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -march=native emulated   vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   clang -O2 native             vs clang -ffp-contract=fast     : 5 of 30000 differ
+  clang -O2 native             vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   clang AVX2 path              vs clang -ffp-contract=fast     : 5 of 30000 differ
+  clang AVX2 path              vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
   clang -O2 emulated FP        vs clang -ffp-contract=fast     : 5 of 30000 differ
+  clang -O2 emulated FP        vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
+  gcc AVX2 -ffp-contract=fast  vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc AVX2 -ffp-contract=fast  vs clang AVX2 -ffp-contract=fast : 5 of 30000 differ
+  clang -ffp-contract=fast     vs clang AVX2 -ffp-contract=fast : 2 of 30000 differ
 
 ## step 4 -- key recovery from each divergent pair
 # cref_contract_recover.jl -- two builds of the C reference, n=512

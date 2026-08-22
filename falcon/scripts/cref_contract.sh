@@ -61,6 +61,8 @@ for NAME in cl_fast cl_def gc_def; do
   "$OUT/$NAME" "$N" > "$OUT/$NAME.bin" 2> "$OUT/$NAME.err"
   echo "$NAME  $(head -1 "$OUT/$NAME.err")"
 done
+echo "(step 3b re-signs a smaller batch per build; its streams are truncated to match)"
+
 
 echo
 echo "## step 3 -- do the streams agree?"
@@ -93,19 +95,26 @@ build m_g_emun  gcc   -O2 -march=native -DFALCON_FPEMU=1
 build m_c_base  clang -O2 -DFALCON_FPNATIVE=1
 build m_c_avx2  clang -O2 -march=native -DFALCON_FPNATIVE=1 -DFALCON_AVX2=1
 build m_c_emu   clang -O2 -DFALCON_FPEMU=1
-for NAME in m_g_base m_g_mnat m_g_avx2 m_g_emu m_g_emun m_c_base m_c_avx2 m_c_emu; do
+# and the two contracted builds of the hand-vectorised path, to see whether the
+# AVX2 intrinsics are contracted too and whether they land on the same stream
+build x_c_avx2f clang -O2 -march=native -ffp-contract=fast -DFALCON_AVX2=1 -DFALCON_FPNATIVE=1
+build x_g_avx2f gcc   -O2 -march=native -ffp-contract=fast -DFALCON_AVX2=1 -DFALCON_FPNATIVE=1
+for NAME in m_g_base m_g_mnat m_g_avx2 m_g_emu m_g_emun m_c_base m_c_avx2 m_c_emu \
+            x_c_avx2f x_g_avx2f; do
   "$OUT/$NAME" "$M" > "$OUT/$NAME.bin" 2>/dev/null
 done
 python3 - "$OUT" "$M" <<'PY2'
 import sys, os, itertools
 O, M = sys.argv[1], int(sys.argv[2])
 names = ["m_g_base","m_g_mnat","m_g_avx2","m_g_emu","m_g_emun",
-         "m_c_base","m_c_avx2","m_c_emu","cl_fast"]
+         "m_c_base","m_c_avx2","m_c_emu","x_g_avx2f","cl_fast","x_c_avx2f"]
 label = {"m_g_base":"gcc -O2 native", "m_g_mnat":"gcc -O2 -march=native",
          "m_g_avx2":"gcc AVX2 path", "m_g_emu":"gcc -O2 emulated FP",
          "m_g_emun":"gcc -march=native emulated", "m_c_base":"clang -O2 native",
          "m_c_avx2":"clang AVX2 path", "m_c_emu":"clang -O2 emulated FP",
-         "cl_fast":"clang -ffp-contract=fast"}
+         "x_g_avx2f":"gcc AVX2 -ffp-contract=fast",
+         "cl_fast":"clang -ffp-contract=fast",
+         "x_c_avx2f":"clang AVX2 -ffp-contract=fast"}
 d = {}
 for n in names:
     p = os.path.join(O, n + ".bin")
