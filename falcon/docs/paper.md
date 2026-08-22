@@ -633,7 +633,63 @@ manufactured 10 integer centres there with zero straddles. A larger perturbation
 source (FMA), a conformance-mismatch report, or a side channel would. We state
 the shape and its requirement; we do not claim a working attack on plain Falcon.
 
-### 6.5 Two directions that did not pan out (recorded honestly)
+### 6.5 The events alone determine the key — no difference vectors, no lattice
+
+Before anything else in this subsection: §6.4 already states the linear form and
+already names the attack shape. What is new here is that we *ran* the solve, and
+that running it changed two things we had assumed. The project has three times
+now claimed something that turned out to be in ePrint 2024/1709; the failure mode
+one step further along is claiming something that is already in our own §6.4, and
+we are explicit that the form is not the new part.
+
+ePrint 2024/1709 §5 dismisses a first-two divergence in one paragraph: the
+resulting difference vector `ds` "is a short lattice vector, but it is not
+expected to be short enough to make key recovery feasible." That is a statement
+about the *shortness of `ds`*. The channel of §6.4 never touches `ds`. Once the
+event is `(c·f)_{n/2−1} ≡ 0 (mod q)`, the leak is carried by the *occurrence* of
+the event and by the public syndrome, not by the value of the signature
+difference — so the objection, read at its own scope, does not reach it. We
+checked that by solving.
+
+`scripts/event_solve.jl` forms one row per event — the coefficient of `f_j` in
+`(c·f)_{n/2−1}`, which is `c_{k−j}` for `k−j ≥ 0` and `−c_{k−j+n}` otherwise,
+with `k = n/2−1` — and row-reduces over `F_q`:
+
+```
+collected 511 events from 5823368 syndromes (rate 8.77e-05, predicted 1/q = 8.14e-05)
+system rank 511 of 512 unknowns
+
+recovered vector: max |.| = 16   (true f has max |.| = 16)
+matches the secret f: true  (up to sign)
+```
+
+`n−1 = 511` events give a rank-511 system whose kernel is one-dimensional;
+scanning the `q−1` scalar multiples of the kernel vector and keeping the shortest
+returns `f` itself, up to sign. The whole recovery is one `512 × 512` Gaussian
+elimination — 49 seconds, no lattice reduction, no difference vectors. The
+observed event rate, 8.77 × 10⁻⁵ over 5.8 × 10⁶ syndromes, agrees with the `1/q`
+that §6.4 derives exactly rather than heuristically at this position, so the
+`q` in Heuristic 1 appears directly as the attack's query cost.
+
+Two assumptions we had carried, and lost:
+
+* We had inherited "first-two divergences yield only a short vector" from
+  2024/1709 §5 without asking whether it applied. It does not: `‖ds‖` is
+  irrelevant to a channel that reads the event and not the difference.
+* We had assumed that `n` equations determine `f mod q` but that recovering `f`
+  itself needs a lattice lift. It does not: the kernel is one-dimensional and
+  `‖f‖ ≪ q`, so the lift is a scan over `q−1` scalars, not a short-vector problem.
+
+**What this does not establish.** It establishes the solve, not the oracle. The
+script draws the syndromes uniformly rather than hashing messages — justified by
+`hash_to_point`'s output being uniform, and by the measured first-two event rate
+matching the prediction (2.08 × 10⁻⁴ observed against 1.63 × 10⁻⁴ predicted,
+`scripts/first_two_probe.jl`) — but we did not re-run it with real hashes, and we
+say so rather than implying we did. The oracle that tells an adversary *which*
+messages produced an event is exactly what §6.4 flags as missing, and the
+respellings of this paper do not supply one.
+
+### 6.6 Two directions that did not pan out (recorded honestly)
 
 Two hypotheses we tested and rejected, since the boundary they probe is part of
 the result. **A weak-key class by `‖(g,−f)‖²`**: the last-two rate is
@@ -648,7 +704,7 @@ positions holds for random messages. (Whether a chosen-message adversary can
 reach the interior positions, whose denominators are within double precision up
 to the first and last *six* calls, is left open.)
 
-### 6.6 The leak is structural, not generic rounding
+### 6.7 The leak is structural, not generic rounding
 
 Injecting a uniform perturbation `ε` at every sampler centre and measuring the
 divergence rate (`scripts/precision_law.jl`) confirms Lemma 1's linear law
@@ -955,7 +1011,7 @@ Confining a rounding-mode flip to a window at the tail of the traversal
 (`scripts/rounding_attack.jl`) gives 0 recoveries in 48000 signature pairs,
 consistent with that ceiling rather than with any amplification. **Every attack
 in this family needs of order 10⁴ same-syndrome pairs whatever tool is
-brought** — which also explains why increasing the perturbation strength (§6.6)
+brought** — which also explains why increasing the perturbation strength (§6.7)
 buys so little.
 
 ---
@@ -1280,7 +1336,7 @@ runs unless a measurement asks otherwise.
 | one divergence, mechanism (§6) | `julia --project=falcon falcon/scripts/first_divergence.jl A2 70 534` |
 | key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
 | per-position perturbation profile (§6.3) | `julia --project=falcon falcon/scripts/position_profile.jl 40 250 A1` |
-| precision→rate law (§6.6) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
+| precision→rate law (§6.7) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
 | countermeasure, distribution (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl chisq` |
 | countermeasure, rate (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl rate A1 100 1500 1 out.txt` |
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
