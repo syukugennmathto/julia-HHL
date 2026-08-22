@@ -844,12 +844,17 @@ Five of the six disagreements carry an `F_q` equation: the one-bit oracle is
 of magnitude larger, so the same `|Δμ|` straddles there far less often, 1 of 20
 against 5 of 26. At 3.33 × 10⁻⁵ informative events per query, `n−1 = 511` rows
 cost ≈ 1.5 × 10⁷ signature queries, after which §6.5's Gaussian elimination
-returns `f` in 49 seconds.
+returns `f` in 49 seconds. (§6.7 measures the same quantity on a real
+contracting build and gets 4 × 10⁻⁵, so this arm's estimate is close, and the
+cost is ≈ 1.3 × 10⁷ there.)
 
 **What this is worth, stated against the alternative.** Under the same FMA
 oracle the last-two channel of 2024/1709 §5.1 is also open, at 6.67 × 10⁻⁶ per
-query, so one exploitable pair costs ≈ 1.5 × 10⁵ queries — about a hundred times
-cheaper than the event channel. We are not claiming the faster attack. Three
+query in this arm, so one exploitable pair costs ≈ 1.5 × 10⁵ queries — about a
+hundred times cheaper than the event channel. On the real contracting build of
+§6.7 the gap is wider still: 8 key-yielding divergences and 4 first-two events
+per 100000 messages, i.e. ≈ 1.3 × 10⁴ queries for the key by §5.1 against
+≈ 1.3 × 10⁷ to collect 511 equations. We are not claiming the faster attack. Three
 things are nevertheless true and are the point:
 
 1. The reason 2024/1709 §5 gives for dismissing the first two positions — that
@@ -1177,8 +1182,8 @@ order.)
 What that trade is worth depends on which positions matter, and §6.5 changes the
 answer 2024/1709 assumes. The first two calls are *not* harmless: they yield full
 key recovery by linear algebra over `F_q`. But they are the expensive channel —
-≈ 1.5 × 10⁷ queries under the oracle of §6.6, against ≈ 1.5 × 10⁵ for the last
-two. So part 1 alone closes the expensive channel completely (and
+≈ 1.3 × 10⁷ queries under the oracle measured in §6.7, against ≈ 1.3 × 10⁴ for
+the last two. So part 1 alone closes the expensive channel completely (and
 unconditionally: `q` is odd, §6.6) and leaves the cheap one untouched. Under
 `floor`, 7 of 12 measured exposures sit at the full-key-recovery-by-difference
 end; under `round` without the key-generation change, **all 11 do**. The
@@ -1648,10 +1653,12 @@ general lattice-signature guideline.
    includes first-two events; the comparison in §6 should be read with that
    caveat.
 5. **The event channel's oracle is demonstrated, its end-to-end attack is not.**
-   §6.5 runs the solve and §6.6 measures an oracle that satisfies its two-sided
-   condition, but we did not run the two together: at 3.33 × 10⁻⁵ informative
-   events per query, collecting `n−1 = 511` rows needs ≈ 1.5 × 10⁷ signature
-   pairs, on the order of a day in this harness, which we did not spend. What is
+   §6.5 runs the solve, §6.6 measures an oracle satisfying its two-sided
+   condition, and §6.7 observes four real first-two events from a contracting
+   build of the reference — but we did not run the three together: at the
+   measured 4 × 10⁻⁵ first-two events per message, collecting `n−1 = 511` rows
+   needs ≈ 1.3 × 10⁷ signature pairs, on the order of a day in this harness,
+   which we did not spend. What is
    measured is each half; what is arithmetic is their composition. We also draw
    syndromes uniformly rather than hashing messages (§6.5), and the ≈ 17 % of
    oracle reports that carry no equation (§6.6) would have to be filtered — by
@@ -1717,9 +1724,12 @@ If FIPS 206 requires bit-exact KAT agreement, then:
    one fused multiply-add, and §6.7 shows what that costs: the reference
    implementation built with `clang -O2 -march=native -ffp-contract=fast`
    disagrees with the same clang at its default on **12 of 100000 signatures**,
-   and **8 of those 12 pairs yield the private key** by 2024/1709 §5.1, each an
-   exact NTRU symmetry of the stored key. `-Ofast` and `-ffast-math` both imply
-   that setting. The reference happens to be protected at both compilers'
+   **8 of those 12 pairs yield the private key** by 2024/1709 §5.1, and every
+   one of those keys then signs a fresh message that the victim's public key
+   accepts — universal forgery, at a cost of ≈ 1.3 × 10⁴ messages. `-Ofast` and
+   `-ffast-math` both imply that setting, and a prohibition an implementer reads
+   as "do not call `fma()`" does not cover this case, because nobody wrote `fma`
+   anywhere. The reference happens to be protected at both compilers'
    defaults, but by an accident — the `fpr` struct wrapper, introduced in
    `fpr.h` for type safety, is what stops the contraction — and an accident is
    not a specification. A standard must state `#pragma STDC FP_CONTRACT OFF`
