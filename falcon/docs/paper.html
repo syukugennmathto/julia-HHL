@@ -300,16 +300,16 @@ D11 = sub_fft(G[2,2],
 <thead><tr><th>Arm</th><th>Perturbs</th><th>Quantity</th><th class="num">Events</th><th class="num">Rate</th></tr></thead>
 <tbody>
 <tr class="hl"><td>A2 — cplx div + D11</td><td>Class I (a,b)</td><td>centre</td><td class="num">3 / 400k</td><td class="num">7.5×10⁻⁶</td></tr>
-<tr><td>A1 — unrolled levels</td><td>Class I (c)</td><td>centre</td><td class="num">5 / 100k</td><td class="num">5.0×10⁻⁵</td></tr>
-<tr><td>A1′ — unrolled, 400k</td><td>Class I (c)</td><td>centre</td><td class="num" id="c-a1-400"><span class="pending">measuring…</span></td><td class="num" id="c-a1-400r"></td></tr>
-<tr><td>A2a — cplx div alone</td><td>Class I (a)</td><td>centre</td><td class="num" id="c-a2a"><span class="pending">measuring…</span></td><td class="num">0 / 100k</td></tr>
-<tr><td>A2b — D11 alone</td><td>Class I (b)</td><td>centre</td><td class="num" id="c-a2b"><span class="pending">measuring…</span></td><td class="num">0 / 100k</td></tr>
+<tr class="hl"><td>A2 · n=1024</td><td>Class I (a,b)</td><td>centre</td><td class="num">1 / 350k</td><td class="num">2.9×10⁻⁶</td></tr>
+<tr><td>A1 — unrolled levels</td><td>Class I (c)</td><td>centre</td><td class="num">10 / 525k</td><td class="num">1.9×10⁻⁵</td></tr>
+<tr><td>A2a — cplx div alone</td><td>Class I (a)</td><td>centre</td><td class="num">0 / 100k</td><td class="num">&lt;3.7×10⁻⁵</td></tr>
+<tr><td>A2b — D11 alone</td><td>Class I (b)</td><td>centre</td><td class="num">0 / 100k</td><td class="num">&lt;3.7×10⁻⁵</td></tr>
 <tr><td>B — fpr_inv_sigma</td><td>Class II</td><td><strong>width</strong></td><td class="num">0 / 100k</td><td class="num">0</td></tr>
 </tbody>
 </table>
 </div>
 
-<p><strong>A1 is a positive control</strong>: it is exactly the <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> difference of ePrint 2024/1709 §6.1, and its rate lands on their Table&nbsp;2. <strong>B is a negative control</strong>, and its zero is <em>expected from theory</em>: it perturbs the width, which Lemma&nbsp;2 of that paper bounds at ≈10⁻¹¹ — six orders below our resolution, so the zero carries no information and we do not present it as a finding. <strong>A2 is the arm that is not in that paper, and it is not zero.</strong></p>
+<p><strong>A1 is a positive control</strong>: it is exactly the <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> difference of ePrint 2024/1709 §6.1, and its rate (1.9×10⁻⁵ over 525k) lands on their Table&nbsp;2. <strong>B is a negative control</strong>, and its zero is <em>expected from theory</em>: it perturbs the width, which Lemma&nbsp;2 of that paper bounds at ≈10⁻¹¹ — well below our resolution, so the zero carries no information. <strong>A2 is the arm that is not in that paper, and it is not zero</strong> — and it <strong>replicates at n=1024</strong> (1 in 350k, again at the last two calls, floor straddling 427/426, width bit-identical). A2 and A1 differ by a point factor of 2.5 but not significantly (p ≈ 0.23); both are order 10⁻⁵, consistent with sharing the mechanism, so we report them as comparable rather than ordered.</p>
 
 <figure>
 <svg class="dgm" viewBox="0 0 760 300" role="img" aria-labelledby="figtitle figdesc">
@@ -432,10 +432,10 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 
 <p>Open, and marked as such:</p>
 <ul>
-<li><strong>A2a / A2b are not yet separated</strong> — complex division alone and <span class="mono">D11</span> alone each gave 0/100k; 100k cannot distinguish 7.5×10⁻⁶ from 0. A 400k run of each is <span class="pending">measuring</span> (<span id="lim-a2a">…</span>).</li>
-<li><strong>A2 rarer than A1 is suggested, not established</strong> — the Poisson intervals touch. A 400k run of A1 is <span class="pending">measuring</span> (<span id="lim-a1">…</span>).</li>
+<li><strong>A2a / A2b are not separated</strong> — complex division alone and <span class="mono">D11</span> alone each gave 0/100k; separating a ≈3.75×10⁻⁶ single-arm rate from zero would take millions of signatures. We can say the two together reach the signature, not which one.</li>
+<li><strong>A2 and A1 rates are not distinguished</strong> — factor 2.5 apart but p ≈ 0.23 over 925k pooled signatures; reported as comparable, not ordered.</li>
 <li><strong>The §6.1 asymmetry</strong> ePrint 2024/1709 leaves unexplained, we also do not resolve.</li>
-<li><strong>FALCON-1024 divergence</strong> for A2 and A1 is <span class="pending">measuring</span> (<span id="lim-1024">…</span>).</li>
+<li><strong>FALCON-1024</strong> is measured at lower volume (350k, one event); the rate there is loose, but the one event carries the full mechanism, so replication is established.</li>
 </ul>
 
 <span class="secnum">07 — Recommendations</span>

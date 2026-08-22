@@ -220,15 +220,15 @@ D11 = sub_fft(G[2,2],
 <thead><tr><th>腕</th><th>摂動する</th><th>量</th><th class="num">事象</th><th class="num">率</th></tr></thead>
 <tbody>
 <tr class="hl"><td>A2 ― 複素除算 + D11</td><td>クラス I (a,b)</td><td>中心</td><td class="num">3 / 40万</td><td class="num">7.5×10⁻⁶</td></tr>
-<tr><td>A1 ― 手展開の最下段</td><td>クラス I (c)</td><td>中心</td><td class="num">5 / 10万</td><td class="num">5.0×10⁻⁵</td></tr>
-<tr><td>A1′ ― 手展開、40万</td><td>クラス I (c)</td><td>中心</td><td class="num" id="c-a1-400"><span class="pending">測定中…</span></td><td class="num" id="c-a1-400r"></td></tr>
-<tr><td>A2a ― 複素除算のみ</td><td>クラス I (a)</td><td>中心</td><td class="num" id="c-a2a"><span class="pending">測定中…</span></td><td class="num">0 / 10万</td></tr>
-<tr><td>A2b ― D11 のみ</td><td>クラス I (b)</td><td>中心</td><td class="num" id="c-a2b"><span class="pending">測定中…</span></td><td class="num">0 / 10万</td></tr>
+<tr class="hl"><td>A2 · n=1024</td><td>クラス I (a,b)</td><td>中心</td><td class="num">1 / 35万</td><td class="num">2.9×10⁻⁶</td></tr>
+<tr><td>A1 ― 手展開の最下段</td><td>クラス I (c)</td><td>中心</td><td class="num">10 / 52.5万</td><td class="num">1.9×10⁻⁵</td></tr>
+<tr><td>A2a ― 複素除算のみ</td><td>クラス I (a)</td><td>中心</td><td class="num">0 / 10万</td><td class="num">&lt;3.7×10⁻⁵</td></tr>
+<tr><td>A2b ― D11 のみ</td><td>クラス I (b)</td><td>中心</td><td class="num">0 / 10万</td><td class="num">&lt;3.7×10⁻⁵</td></tr>
 <tr><td>B ― fpr_inv_sigma</td><td>クラス II</td><td><strong>幅</strong></td><td class="num">0 / 10万</td><td class="num">0</td></tr>
 </tbody>
 </table>
 </div>
-<p><strong>A1 は陽性対照</strong> ― ePrint 2024/1709 §6.1 の <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> の差そのもので、率は同論文 Table 2 に載る。<strong>B は陰性対照</strong>で、そのゼロは<em>理論から予期される</em> ― 幅を摂動し、同論文 Lemma 2 がそれを ≈10⁻¹¹ と抑える。これは我々の分解能より 6 桁下なので、ゼロは何も語らず、発見として提示しない。<strong>A2 が、同論文にない腕であり、ゼロでない。</strong></p>
+<p><strong>A1 は陽性対照</strong> ― ePrint 2024/1709 §6.1 の <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> の差そのもので、率（52.5 万本で 1.9×10⁻⁵）は同論文 Table 2 に載る。<strong>B は陰性対照</strong>で、そのゼロは<em>理論から予期される</em> ― 幅を摂動し、同論文 Lemma 2 がそれを ≈10⁻¹¹ と抑える。分解能より遥か下なので、ゼロは何も語らない。<strong>A2 が、同論文にない腕であり、ゼロでない</strong> ― そして <strong>n=1024 でも再現する</strong>（35 万本で 1 件、やはり最後の 2 回、floor が 427/426 をまたぎ、幅はビット一致）。A2 と A1 は点推定で 2.5 倍違うが有意でなく（p ≈ 0.23）、ともに 10⁻⁵ の桁 ― 機構を共有することと整合するので、順序ではなく同程度と報告する。</p>
 
 <figure>
 <svg class="dgm" viewBox="0 0 760 300" role="img" aria-labelledby="ftitle fdesc">
@@ -338,10 +338,10 @@ key 68 sig 1885   call 1024/1024   mu  285.99999999999989  vs  286</pre>
 <p>この実装は定数時間<strong>ではなく</strong>、目指してもいない。定数時間実装ならできない事をする箇所には <code class="inl">CONSTANT TIME:</code> コメントを残した。Julia 実装は実装由来のチャネル（GC・JIT・境界検査・ディスパッチ）を一切閉じられない ― だからこそここでの仕様レベルの問いにはきれいな計測器で、配備用の署名器としては不向きなのだ。していない側面攻撃の貢献を主張するのでなく、そう明記する。</p>
 <p>未解決として明示するもの：</p>
 <ul>
-<li><strong>A2a / A2b がまだ分離できていない</strong> ― 複素除算単独と <span class="mono">D11</span> 単独はどちらも 0/10万。10万では 7.5×10⁻⁶ とゼロを区別できない。各 40万の測定を<span class="pending">実施中</span>（<span id="lim-a2a">…</span>）。</li>
-<li><strong>A2 が A1 より稀か</strong>は示唆止まり ― Poisson 区間が端で重なる。A1 の 40万測定を<span class="pending">実施中</span>（<span id="lim-a1">…</span>）。</li>
+<li><strong>A2a / A2b は分離できていない</strong> ― 複素除算単独と <span class="mono">D11</span> 単独はどちらも 0/10万。単独率 ≈3.75×10⁻⁶ をゼロから分けるには数百万署名が要り、そこまで到達していない。二つ合わせれば署名に届く、とは言えるが、どちらが効くかは言えない。</li>
+<li><strong>A2 と A1 の率は区別できない</strong> ― 点推定で 2.5 倍だが、92.5 万本のプールで p ≈ 0.23。順序ではなく「同程度」と報告する。</li>
 <li><strong>§6.1 の非対称性</strong>は同論文も未解決とし、我々も解けていない。</li>
-<li><strong>FALCON-1024 の発散</strong>（A2・A1）を<span class="pending">測定中</span>（<span id="lim-1024">…</span>）。</li>
+<li><strong>FALCON-1024</strong> は低volume（35万本、1 件）で測定。率の推定は緩いが、その 1 件が機構を完全になぞるので、再現は確立された。</li>
 </ul>
 
 <span class="secnum">07 — 提言</span>

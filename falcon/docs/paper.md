@@ -383,12 +383,17 @@ and PRNG state, and count how often the resulting signatures differ
 
 | arm | perturbs | quantity | events | rate | Poisson 95 % |
 |:----|:---------|:---------|-------:|-----:|:-------------|
-| **A2** | complex division + `D11` (Class I a,b) | **centre** | **3 / 400000** | **7.5 × 10⁻⁶** | 1.5 × 10⁻⁶ … 2.2 × 10⁻⁵ |
-| A1 | hand-unrolled bottom levels (Class I c) | centre | 5 / 100000 | 5.0 × 10⁻⁵ | 1.6 × 10⁻⁵ … 1.2 × 10⁻⁴ |
-| A1′ | hand-unrolled bottom levels, 400k | centre | **(pending)** | | |
-| A2a | complex division alone | centre | 0 / 100000 | 0 | … 3 × 10⁻⁵ |
-| A2b | `D11` alone | centre | 0 / 100000 | 0 | … 3 × 10⁻⁵ |
-| B | `fpr_inv_sigma` vs `1/σ` (Class II) | **width** | 0 / 100000 | 0 | … 3 × 10⁻⁵ |
+| **A2** | complex division + `D11` (Class I a,b) | **centre** | **3 / 400000** | **7.5 × 10⁻⁶** | 1.6 × 10⁻⁶ … 2.2 × 10⁻⁵ |
+| A2 · n = 1024 | complex division + `D11` | centre | **1 / 350000** | 2.9 × 10⁻⁶ | 7 × 10⁻⁸ … 1.6 × 10⁻⁵ |
+| A1 | hand-unrolled bottom levels (Class I c) | centre | 10 / 525000 | 1.9 × 10⁻⁵ | 9.1 × 10⁻⁶ … 3.5 × 10⁻⁵ |
+| A2a | complex division alone | centre | 0 / 100000 | 0 | … 3.7 × 10⁻⁵ |
+| A2b | `D11` alone | centre | 0 / 100000 | 0 | … 3.7 × 10⁻⁵ |
+| B | `fpr_inv_sigma` vs `1/σ` (Class II) | **width** | 0 / 100000 | 0 | … 3.7 × 10⁻⁵ |
+
+The rates are accumulated from independent foreground chunks
+(`scripts/divergence_accum.jl`); background jobs do not survive this
+environment's between-turn suspension (docs/debug_log.md #057), and summing
+independent Poisson chunks is exact.
 
 Before measuring, the harness reports how many of the tree's 9728 doubles each
 arm moves — A2 moves 6800, A2a 6345, A2b 5400, B 452 — so none of the zero
@@ -396,11 +401,26 @@ results is a silent no-op. When a divergence occurs, ≈ 470 of the 512
 coefficients differ, because the byte stream desynchronizes.
 
 **A1 is a positive control**: it is exactly the `sign_dyn` / `sign_tree`
-difference of ePrint 2024/1709 §6.1, and its rate (5 × 10⁻⁵) sits on their Table
-2 (≈ 3 × 10⁻⁵). **B is a negative control**, and its zero is *expected from
-theory*: it perturbs the width, which Lemma 2 of that paper bounds at ~10⁻¹¹ per
-signature — six orders of magnitude below our 3 × 10⁻⁵ resolution, so the zero
+difference of ePrint 2024/1709 §6.1, and its rate (1.9 × 10⁻⁵ over 525000
+signatures) sits on their Table 2 (≈ 3 × 10⁻⁵). **B is a negative control**, and
+its zero is *expected from theory*: it perturbs the width, which Lemma 2 of that
+paper bounds at ~10⁻¹¹ per signature — well below our resolution, so the zero
 carries no information and we do not present it as a finding.
+
+**A2 and A1 are not distinguishable in rate.** A2 at 7.5 × 10⁻⁶ and A1 at
+1.9 × 10⁻⁵ differ by a point-estimate factor of 2.5, but a two-sample Poisson
+test (conditional binomial on the 13 pooled events) gives p ≈ 0.23: not
+significant. We therefore do **not** claim A2 is rarer than A1; both are of
+order 10⁻⁵, which is consistent with their sharing the mechanism. An earlier
+version of this work quoted A1 at 5 × 10⁻⁵ from a single 5-in-100000 point —
+a high fluctuation; the 525000-signature estimate is 1.9 × 10⁻⁵.
+
+**The finding replicates at n = 1024.** One divergence in 350000 signatures,
+and reproducing it (`scripts/divergence_accum.jl` chunk 22, key 34, sig 454)
+puts it at call 2047 of 2048 — the last two calls again — with `floor` straddling
+427/426 and the leaf width bit-identical between runs. The mechanism is
+degree-independent, as expected; the rate is comparable because
+`1/‖(g,−f)‖²` is comparable at the two degrees (both ≈ 6 × 10⁻⁵).
 
 **A2 is the arm that is not in that paper**, and it is not zero. All three of
 its divergences carry the mechanism exactly
@@ -664,12 +684,13 @@ reason §5's underdetermined choices are normative for it.
 ## 12. Limitations
 
 1. **A2a / A2b are not separated.** Complex division alone and `D11` alone each
-   gave 0 / 100000; 100000 signatures cannot distinguish 7.5 × 10⁻⁶ from 0, so
-   we cannot yet say whether one respelling suffices or both are needed. A 400000
-   run of each is **(pending)**.
-2. **A2 rarer than A1 is suggested, not established.** 7.5 × 10⁻⁶ vs 5.0 × 10⁻⁵;
-   the Poisson intervals touch. A 400000 run of A1 (arm A1′) is **(pending)** to
-   settle it.
+   gave 0 / 100000; separating a ≈ 3.75 × 10⁻⁶ single-arm rate from zero would
+   take millions of signatures, which we did not reach. So we cannot say whether
+   one respelling suffices or both are needed — only that the two together reach
+   the signature.
+2. **A2 and A1 rates are not distinguished.** They differ by a point factor of
+   2.5 but not significantly (p ≈ 0.23 over 925000 pooled signatures); both are
+   order 10⁻⁵. We report this as "comparable," not as an ordering.
 3. **The §6.1 asymmetry is unexplained.** ePrint 2024/1709 reports, and we do
    not resolve, that conditional on an integer centre the last two calls diverge
    more readily than the first two, specifically for the `sign_dyn`/`sign_tree`
@@ -677,9 +698,10 @@ reason §5's underdetermined choices are normative for it.
    not the conditional probability they ask about.
 4. **One machine.** The performance spread is across compilers and optimization
    levels, not hardware.
-5. **FALCON-1024 divergence** is measured for A2 and A1 **(pending)**; the
-   mechanism is degree-independent but the rate depends on `‖(g,−f)‖²`, which
-   differs at n = 1024.
+5. **FALCON-1024** is measured at lower volume (350000 signatures, one event);
+   the rate estimate there is loose (95 % CI 7 × 10⁻⁸ … 1.6 × 10⁻⁵), but the one
+   event carries the full mechanism, so replication is established even though
+   the rate is not pinned.
 
 ---
 
