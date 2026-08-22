@@ -148,6 +148,10 @@ for this particular question.
    builds (two compilers, three optimization levels, emulated and native
    floating point) and the Python reference, reported as distributions rather
    than single numbers.
+6. **A cross-scheme scoping** (§11.1): from the reference code of Mitaka,
+   Antrag and HAWK, the sensitivity requires both floating point in the signing
+   sampler and a small-denominator rational centre — Falcon alone has both, so
+   the hazard is specific to its design, not generic to lattice hash-and-sign.
 
 We are equally explicit about what is **not** a contribution. The arithmetic
 mechanism (an integer centre passing through `floor`), the fact that the
@@ -789,7 +793,44 @@ byte-exact reproduction (§4) does work the attack papers do not need to.
 "No Floating-Point Arithmetic" provision; FIPS 205 (SLH-DSA) is hash-based. Both
 therefore guarantee cross-implementation bit-exactness by construction, which is
 the property FIPS 206 must engineer for FALCON rather than inherit, and the
-reason §5's underdetermined choices are normative for it.
+reason §5's underdetermined choices are normative for it. Go 1.27 (August 2026)
+shipped `crypto/mldsa` in its standard library, following ML-KEM in 1.24, while
+no standard library ships FN-DSA — a concrete illustration that the
+integer/bit-exact schemes are the ones deploying first.
+
+### 11.1 The sensitivity is specific to Falcon's design (cross-scheme)
+
+ePrint 2024/1709's footnote 6 states that Mitaka and Antrag, though they reuse
+Falcon's `SamplerZ`, are not sensitive, because they call it with continuously
+distributed centres. We tested this — and extended it to HAWK — by reading the
+schemes' reference implementations directly (rather than porting, which risks
+attributing a port bug to the scheme): `espitau/Mitaka-EC22`, `mti/antrag`, and
+the KAT-validated `mjosaarinen/lil-hawk-py`.
+
+| scheme | signing sampler | centre into the integer sampler | FP in signing | Falcon-class sensitive |
+|:-------|:----------------|:--------------------------------|:-------------:|:----------------------:|
+| Falcon | ffSampling tree (Klein–GPV) | rational, denominator `q` or `‖(g,−f)‖²` at four positions | yes | **yes** |
+| Mitaka | hybrid (Peikert), continuous Box–Muller perturbation | continuous | yes | no |
+| Antrag | hybrid, continuous perturbation (builds on Mitaka) | continuous | yes | no |
+| HAWK | integer CDT, parity-bit centre | `{0, ½}` via a bit-selected fixed table | **no** (signing) | no |
+
+Two facts from the code. Mitaka's `sampler` (and Antrag's, which is built on it)
+adds a continuous Box–Muller normal (`normaldist`) to the target before the
+discrete sampler, so its centre is continuous and integer centres occur with
+probability zero — footnote 6 is correct by construction. HAWK's signing is
+entirely integer: its `SamplerSign` centre is a single parity bit selecting one
+of two fixed cumulative-distribution tables, and its only floating-point FFT is
+in the *verifier's* `RebuildS0`, which does not affect the produced signature.
+
+This yields a two-condition characterisation: the sensitivity requires **both**
+(a) floating point in the signing sampler **and** (b) a centre that takes exact
+rational values with small denominators (hence near-integer with non-negligible
+probability). Falcon is the only one of the four deployed NTRU/lattice
+hash-and-sign schemes with both; Mitaka and Antrag have (a) but not (b), HAWK
+has neither. The sensitivity is therefore not a generic hazard of lattice
+hash-and-sign signatures but a specific consequence of Falcon's design — which
+is also why the fixes belong in the Falcon/FN-DSA specification rather than in a
+general lattice-signature guideline.
 
 ---
 
