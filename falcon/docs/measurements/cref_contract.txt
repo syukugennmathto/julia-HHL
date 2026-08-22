@@ -1,0 +1,54 @@
+## step 0 -- which settings contract, on which expression shape
+compiler and flags                   plain wrapped
+gcc -O2                                  1       0
+gcc -O2 -ffp-contract=on                 0       0
+gcc -O2 -ffp-contract=fast               1       0
+gcc -O2 -ffp-contract=off                0       0
+gcc -Ofast                               1       0
+clang -O2                                1       0
+clang -O2 -ffp-contract=on               1       0
+clang -O2 -ffp-contract=fast             1       1
+clang -O2 -ffp-contract=off              0       0
+clang -Ofast                             1       1
+
+## step 1 -- three builds of the reference, native double
+cl_fast: 143 fma instructions   [clang -O2 -march=native -ffp-contract=fast]
+cl_def: 0 fma instructions   [clang -O2 -march=native]
+gc_def: 0 fma instructions   [gcc -O2 -march=native]
+
+## step 2 -- 100000 signatures per build, one key, deterministic tape
+cl_fast  privkey fnv 39afef910dae5682
+cl_def  privkey fnv 39afef910dae5682
+gc_def  privkey fnv 39afef910dae5682
+
+## step 3 -- do the streams agree?
+gcc default == clang default : identical over 100000 signatures
+clang -ffp-contract=fast vs clang default : 12 of 100000 differ (rate 0.00012)
+
+## step 4 -- key recovery from each divergent pair
+# cref_contract_recover.jl -- two builds of the C reference, n=512
+# /tmp/cref_contract/dump_fast.txt  vs  /tmp/cref_contract/dump_def.txt
+
+message 7655   : 1023 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
+message 8861   :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^256 (f,g)
+message 15028  : 1023 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
+message 23215  :  966 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-2, 1)  ||(g,-f)||^2 = 16676 <= bound 16822  = -x^0 (f,g)
+message 23823  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = -x^256 (f,g)
+message 38958  : 1020 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
+message 66120  : 1023 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
+message 69227  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^0 (f,g)
+message 69647  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^256 (f,g)
+message 78710  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^256 (f,g)
+message 85161  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = -x^256 (f,g)
+message 87268  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^0 (f,g)
+
+# 12 divergent pairs; 8 yielded the private key by section 5.1,
+# 4 did not -- their dz is not 2-sparse in z0, so the divergence was not
+# at the last two sampler calls.  Section 6.2 measured zero interior integer
+# centres in 1.02e8 draws, so those are first-two divergences: the positions
+# ePrint 2024/1709 section 5 sets aside, and the ones section 6.5 turns into
+# one F_q equation each.
+
+real	2m41.125s
+user	2m39.958s
+sys	0m1.329s

@@ -57,9 +57,16 @@ which we run. That paper dismisses those positions because the difference vector
 is not short enough, a reason this channel does not depend on. Second, the
 oracle such a channel needs exists exactly inside a two-sided window on the
 perturbation size, whose ends we measure (2.8 × 10⁻¹⁴ to 4.9 × 10⁻¹¹, 3.2
-decades); our own respellings sit below it, but **C99 `FP_CONTRACT` — GCC's
-default `-ffp-contract=fast` against clang's off — lands inside it**, and the
-resulting one-bit oracle is 83 % informative. Performance: this
+decades); our own respellings sit below it, but C99's `FP_CONTRACT` — the
+licence a compiler has to fuse `a*b + c` — lands inside it. We then stop
+modelling and build the C reference itself: **compiled with `clang -O2
+-march=native -ffp-contract=fast` it disagrees with the same clang at its
+default on 12 of 100000 signatures, and 8 of those 12 pairs yield the private
+key**, each an exact NTRU symmetry of the stored one. The remaining 4 are
+divergences at the first two calls — the channel above. `-Ofast` and
+`-ffast-math` imply the flag; what protects the reference at both compilers'
+defaults is the `fpr` struct wrapper, introduced for type safety, whose
+FP_CONTRACT-blocking effect is documented nowhere. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -182,19 +189,29 @@ for this particular question.
    perturbation exceeds the *shared* rounding error (below which the two
    implementations' `floor` cannot disagree) and stays below the interior
    false-positive ceiling. We measure both ends — 2.8 × 10⁻¹⁴ and 4.9 × 10⁻¹¹,
-   3.2 decades — place this paper's own respellings *below* the window, and
-   exhibit a difference *inside* it that requires no disagreement between
-   implementers at all: C99 `FP_CONTRACT`, i.e. building the same reference with
-   GCC rather than clang at their defaults.
-7. **An honest three-way performance comparison** (§9) against a range of C
+   3.2 decades — and place this paper's own respellings *below* the window.
+7. **A divergence in the reference implementation itself, between two conforming
+   builds, and the key out of it** (§6.7). Building the C reference with
+   `clang -O2 -march=native -ffp-contract=fast` and with the same clang at its
+   default — one flag, which `-Ofast` and `-ffast-math` both imply — gives two
+   signers that disagree on **12 of 100000** signatures under one key on one
+   PRNG tape. **Eight of the twelve pairs yield the private key**, each verified
+   to be an exact NTRU symmetry `±x^k(f,g)` with `‖(g,−f)‖²` inside the
+   key-generation bound; the other four are first-two divergences, the channel
+   of contribution 5. This is not a model of an implementation difference: it is
+   the NIST reference, two `make` invocations apart. It also identifies what
+   currently prevents it — the `fpr` struct wrapper of `fpr.h`, whose stated
+   purpose is type safety and which blocks contraction as a side effect nobody
+   recorded.
+8. **An honest three-way performance comparison** (§9) against a range of C
    builds (two compilers, three optimization levels, emulated and native
    floating point) and the Python reference, reported as distributions rather
    than single numbers.
-8. **A cross-scheme scoping** (§11.1): from the reference code of Mitaka,
+9. **A cross-scheme scoping** (§11.1): from the reference code of Mitaka,
    Antrag and HAWK, the sensitivity requires both floating point in the signing
    sampler and a small-denominator rational centre — Falcon alone has both, so
    the hazard is specific to its design, not generic to lattice hash-and-sign.
-9. **An evaluation of the proposed countermeasure** (§7.1): we implement ePrint
+10. **An evaluation of the proposed countermeasure** (§7.1): we implement ePrint
    2024/1709's Algorithm 4, verify the rational structure of the centres
    directly, and show that its *first part alone* leaves the cheapest
    key-recovery positions exposed — recovering keys, 3 of 3, with that part
@@ -760,7 +777,7 @@ straddles the ≈ 2n interior centres, whose fractional parts are essentially
 uniform, at a rate linear in `δ`. Measured over 1200 syndromes per point:
 `rate = κδ` with `κ = 1.62 × 10³` (the four points give 1.42, 2.06, 1.83 and
 1.39 × 10³), consistent with the `≈ 2n` of Lemma 1 and with the coarser sweep of
-§6.8. Those divergences carry no equation. The solve of §6.5 needs `n−1` rows
+§6.9. Those divergences carry no equation. The solve of §6.5 needs `n−1` rows
 that are all true, so it tolerates a false fraction of about `1/n`, giving
 `κδ ≤ (1/n)(1/q)·P(straddle)` and
 
@@ -797,9 +814,11 @@ on 200 manufactured events: 33 straddled call 1
 
 `1.42 × 10⁻¹⁴` is inside the window, near its lower edge, and the straddle
 probability it buys is 0.165 (33/200; an independent scan over calls 1 *and* 2
-gives 5/26 = 0.19). So GCC-built and clang-built copies of the same reference
-implementation, on the same machine, constitute an oracle for the event channel
-of §6.5.
+gives 5/26 = 0.19). So a contracting build of a FALCON signer is an oracle for
+the event channel of §6.5 — which raises the question of whether any *actual*
+build contracts. §6.7 answers it by building the C reference rather than
+modelling it, and the answer is narrower and sharper than the one we assumed
+here.
 
 **How noisy that oracle is.** Scanning 150000 syndromes with one arm and running
 the other only on the hits:
@@ -843,7 +862,113 @@ q(2m+1)`, even on the left and odd on the right, so it never happens for odd
 `scripts/denominator_check.jl` (calls 1–2: five integer centres, zero
 half-integer). We had recorded that count without noticing it was forced.
 
-### 6.7 Two directions that did not pan out (recorded honestly)
+### 6.7 The reference implementation, built two conforming ways, differs — and 8 of 12 divergent pairs give the key
+
+§6.6 measured a window and a Julia arm inside it. This subsection replaces the
+arm with the thing itself: the FALCON reference implementation, compiled twice,
+signing the same messages under the same key on the same PRNG tape. One script
+does all of it (`scripts/cref_contract.sh`, 2 minutes 41 seconds).
+
+It also corrects a claim we made from the model. An earlier draft of §6.6 said
+that GCC-built and clang-built copies of the reference constitute an oracle,
+reasoning from GCC's default being `-ffp-contract=fast`. Measured, that is
+false, and the reason is worth more than the claim was.
+
+**The reference's `fpr` wrapper blocks contraction — accidentally.** The native
+build wraps `double` in `typedef struct { double v; } fpr;`, and the comment in
+`fpr.h` gives the reason: so that the compiler complains if raw arithmetic
+operators are used on the type. It has a second effect nobody wrote down.
+Compiling the reference's `FPC_MUL` shape (`fpr_sub(fpr_mul(a,b),
+fpr_mul(c,d))`) beside the plain `a*b - c*d`:
+
+| compiler and flags | contracts `a*b - c*d` | contracts the `fpr` shape |
+|:--|:--:|:--:|
+| `gcc -O2` (default = `fast`) | yes | **no** |
+| `gcc -O2 -ffp-contract=fast` | yes | **no** |
+| `gcc -Ofast` | yes | **no** |
+| `clang -O2` (default) | yes | **no** |
+| `clang -O2 -ffp-contract=fast` | yes | **yes** |
+| `clang -Ofast` | yes | **yes** |
+
+GCC will not contract through the wrapper at any setting we could find; clang
+will, but only when contraction is set to `fast` — which `-Ofast` and
+`-ffast-math` both imply. So the hazard is narrower than we claimed and sharper
+than we expected: it is not "two compilers", it is **one optimization flag**, and
+the thing standing between the reference and it is a type-safety idiom whose
+author documented a different purpose.
+
+**Three builds, one key.** `-DFALCON_FPNATIVE=1 -march=native`, everything else
+equal:
+
+```
+cl_fast: 143 fma instructions   [clang -O2 -march=native -ffp-contract=fast]
+cl_def:    0 fma instructions   [clang -O2 -march=native]
+gc_def:    0 fma instructions   [gcc   -O2 -march=native]
+```
+
+All three generate the identical private key from the identical seed (key
+generation runs the FFT too, so this had to be checked, not assumed).
+
+**100000 signatures each.**
+
+```
+gcc default == clang default : identical over 100000 signatures
+clang -ffp-contract=fast vs clang default : 12 of 100000 differ (rate 1.2e-4)
+```
+
+That rate is 16× the A2 respelling rate of §6 and 2.4× the A1 rate. It is also
+close to what §6.6 predicts from first principles: the integer-centre density is
+`2/q + 2/‖(g,−f)‖² = 1.63×10⁻⁴ + 1.20×10⁻⁴ = 2.83×10⁻⁴`, so an observed
+`1.2×10⁻⁴` is a straddle probability of 0.42 — the saturated end of §6.6's
+curve, not the 0.165 our Julia arm produced. A real contracting build perturbs
+harder than our model of one, because it contracts 143 sites across the whole
+signing path and the model contracted four routines in the FFT. §12.6 said the
+arm was an upper bound on a real build's perturbation; that was wrong in the
+other direction, and the measurement is the authority.
+
+**Every divergent pair, handed to the attacker.** The recovery of 2024/1709 §5.1
+needs `Δz₀ = a + b·x^{n/2}`, so its success is itself a proof that the divergence
+was at the last two sampler calls. `scripts/cref_contract_recover.jl` sees only
+the two signatures, the public key and the message — it reconstructs the
+untransmitted `s₁` as `c − s₂h (mod q)`, which is exact because `‖Δs₁‖ ≪ q/2` —
+and searches the small `(a,b)`:
+
+```
+message 8861   :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = x^256 (f,g)
+message 23215  :  966 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-2, 1)  = -x^0 (f,g)
+message 23823  :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = -x^256 (f,g)
+message 69227  :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = x^0 (f,g)
+message 69647  :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = x^256 (f,g)
+message 78710  :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = x^256 (f,g)
+message 85161  :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = -x^256 (f,g)
+message 87268  :  916 of 1024 coefficients differ -> KEY RECOVERED (a,b)=(-1, 0)  = x^0 (f,g)
+message 7655   : 1023 of 1024 coefficients differ -> no (a,b)
+message 15028  : 1023 of 1024 coefficients differ -> no (a,b)
+message 38958  : 1020 of 1024 coefficients differ -> no (a,b)
+message 66120  : 1023 of 1024 coefficients differ -> no (a,b)
+```
+
+**Eight of twelve.** Each recovered pair is an exact NTRU symmetry `±x^k(f,g)` of
+the stored key, with `‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822` — a working private
+key, not an approximation of one. Two signatures, from two builds of the
+reference, on one message.
+
+The other four are the point of §6.4–§6.6. Their `Δz` is not 2-sparse in `z₀`
+— that is what the failed exact division proves — so the divergence was not at
+the last two calls; §6.2 found zero interior integer centres in 1.02 × 10⁸
+draws, leaving the first two. The 4/12 split is close to the 30/70 of
+2024/1709's Table 2, from a completely different perturbation source. And those
+four are exactly the events of §6.5: each is one `F_q`-linear equation on `f`,
+in the positions that paper sets aside as yielding "a short lattice vector… not
+expected to be short enough to make key recovery feasible". Here they are, in
+the reference implementation, one build flag away.
+
+The two coefficient counts separate cleanly — 916–966 for the recoverable pairs,
+1020–1023 for the others — which is a usable classifier and closes the last gap
+in §6.6's noise accounting: an adversary who sees the two signatures can tell
+the two channels apart without knowing anything else.
+
+### 6.8 Two directions that did not pan out (recorded honestly)
 
 Two hypotheses we tested and rejected, since the boundary they probe is part of
 the result. **A weak-key class by `‖(g,−f)‖²`**: the last-two rate is
@@ -858,7 +983,7 @@ positions holds for random messages. (Whether a chosen-message adversary can
 reach the interior positions, whose denominators are within double precision up
 to the first and last *six* calls, is left open.)
 
-### 6.8 The leak is structural, not generic rounding
+### 6.9 The leak is structural, not generic rounding
 
 Injecting a uniform perturbation `ε` at every sampler centre and measuring the
 divergence rate (`scripts/precision_law.jl`) confirms Lemma 1's linear law
@@ -1185,7 +1310,7 @@ Confining a rounding-mode flip to a window at the tail of the traversal
 (`scripts/rounding_attack.jl`) gives 0 recoveries in 48000 signature pairs,
 consistent with that ceiling rather than with any amplification. **Every attack
 in this family needs of order 10⁴ same-syndrome pairs whatever tool is
-brought** — which also explains why increasing the perturbation strength (§6.8)
+brought** — which also explains why increasing the perturbation strength (§6.9)
 buys so little.
 
 ---
@@ -1452,16 +1577,17 @@ general lattice-signature guideline.
    6 observed disagreements and is the loosest number in this paper. A reader should
    treat §6.5 + §6.6 as a *channel with its two ends measured*, not as an
    executed end-to-end key recovery.
-6. **The FMA arm is a model of a compiler, not a compiler.** §6.6 contracts the
-   FFT's complex products with `fma` because that is the strongest thing
-   `-ffp-contract=fast` may do to the reference's `FPC_MUL`. We did not build
-   the C reference both ways and diff the signatures. A real GCC build will
-   contract *some* subset of the sites we contract — as our own first attempt
-   with `muladd` demonstrated, the subset is not predictable from the source —
-   so the perturbation we report is an upper bound on that build's, and a build
-   that contracts too few sites could fall below the window's lower edge.
-   Confirming the oracle on two actual C builds is the obvious next experiment
-   and we flag it as not done.
+6. **The contraction result is one compiler pair on one machine.** §6.7 builds
+   the C reference and diffs it, which closes the gap §6.6's Julia arm left, but
+   `clang -ffp-contract=fast` against `clang` default on x86-64 is a single
+   point. We did not test aarch64 — where FMA is in the base ISA rather than
+   behind `-march=native`, so the picture could differ — nor MSVC, nor older
+   compiler versions, nor the `-mavx2` AVX2 code path of the reference, nor
+   FALCON-1024. We also did not find a *default* configuration of any compiler
+   that contracts through the `fpr` wrapper; that the wrapper blocks it may be
+   robust or may be an artefact of these two versions, and only a wider survey
+   would say. What is established is that a conforming build exists that
+   diverges, and what it costs when it does.
 7. **A withdrawn claim.** An earlier version of this work stated that part 2 of
    the §7.1 countermeasure was undeployable, from 0 odd-norm keys in 3200. That
    was an argument from absence and it was wrong; §7.1(v) reports the
@@ -1503,13 +1629,20 @@ If FIPS 206 requires bit-exact KAT agreement, then:
    so the reason 2024/1709 §5 gives for treating those positions as harmless
    does not hold. Any countermeasure justified by "the first two calls yield
    only a short lattice vector" needs a different justification.
-3. **Say whether `FP_CONTRACT` is in scope.** C99 6.5p8 lets a conforming
-   compiler contract `a*b + c` into one fused multiply-add; GCC does so by
-   default and clang does not. §6.6 measures that this difference alone perturbs
-   the first-two sampler centres by ≈ 1.4 × 10⁻¹⁴, inside the window in which it
-   becomes a key-recovery oracle. A specification that requires bit-exact
-   signatures must say `#pragma STDC FP_CONTRACT OFF` (or forbid the affected
-   expressions), because no amount of care in *writing* the reference pins this.
+3. **Say that `FP_CONTRACT` must be off, normatively.** This is the item we
+   would put first. C99 6.5p8 lets a conforming compiler contract `a*b + c` into
+   one fused multiply-add, and §6.7 shows what that costs: the reference
+   implementation built with `clang -O2 -march=native -ffp-contract=fast`
+   disagrees with the same clang at its default on **12 of 100000 signatures**,
+   and **8 of those 12 pairs yield the private key** by 2024/1709 §5.1, each an
+   exact NTRU symmetry of the stored key. `-Ofast` and `-ffast-math` both imply
+   that setting. The reference happens to be protected at both compilers'
+   defaults, but by an accident — the `fpr` struct wrapper, introduced in
+   `fpr.h` for type safety, is what stops the contraction — and an accident is
+   not a specification. A standard must state `#pragma STDC FP_CONTRACT OFF`
+   (or an equivalent normative prohibition), because no amount of care in
+   *writing* the reference pins this and the current protection is undocumented
+   even in the reference itself.
 4. **Say whether the floating-point environment is in scope.** §7.3 shows a
    signer that is conforming in every respect except the ambient IEEE-754
    rounding direction emits signatures that **fail verification** — 0 of 200
@@ -1549,10 +1682,14 @@ given there is about the difference vector and this channel does not read it.
 And the oracle such a channel needs turns out to live in a window barely three
 decades wide, whose lower end is not a matter of anyone's precision but of the
 rounding error the two implementations *share*. Our own respellings fall below
-that window. The default of a mainstream C compiler falls inside it. That is the
-form the problem takes when a signature is a function of floating-point
-arithmetic: the dangerous difference is not the one an implementer chooses, it
-is the one nobody wrote down.
+that window; a single optimization flag falls inside it. Compiled with
+`-ffp-contract=fast`, the reference implementation disagrees with itself on one
+signature in ten thousand, and two thirds of those disagreements hand over the
+private key. What stands between FN-DSA and that today is a `struct` wrapper
+introduced for type safety, in a header, with a comment about something else.
+That is the form the problem takes when a signature is a function of
+floating-point arithmetic: the dangerous difference is not the one an
+implementer chooses, it is the one nobody wrote down.
 
 Along the way, an implementation in a language that cannot
 hide its own runtime variance turns out to be an unexpectedly clean instrument
@@ -1670,7 +1807,7 @@ runs unless a measurement asks otherwise.
 | one divergence, mechanism (§6) | `julia --project=falcon falcon/scripts/first_divergence.jl A2 70 534` |
 | key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
 | per-position perturbation profile (§6.3) | `julia --project=falcon falcon/scripts/position_profile.jl 40 250 A1` |
-| precision→rate law (§6.8) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
+| precision→rate law (§6.9) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
 | countermeasure, distribution (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl chisq` |
 | countermeasure, rate (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl rate A1 100 1500 1 out.txt` |
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
@@ -1681,6 +1818,7 @@ runs unless a measurement asks otherwise.
 | **key recovery from events alone** (§6.5) | `julia --project=falcon falcon/scripts/event_solve.jl` |
 | **the oracle window, all four ends** (§6.6) | `julia --project=falcon falcon/scripts/window.jl all 200 1200` |
 | the one-bit oracle's noise (§6.6) | `julia --project=falcon falcon/scripts/window.jl noise 10 150000` |
+| **two builds of the C reference, end to end** (§6.7) | `sh falcon/scripts/cref_contract.sh 100000` |
 | rounding mode invalidates signatures (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
 | the attack-family ceiling (§7.3) | `julia --project=falcon falcon/scripts/rounding_attack.jl 20 2400 1022` |
 | Heuristic 1 (§6.2) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
