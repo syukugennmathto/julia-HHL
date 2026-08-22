@@ -895,7 +895,7 @@ constant-time, allocation-free formulation and a statement of what `BerExp` does
 with a negative `r`. We present snapping as a promising direction, not a
 finished countermeasure.
 
-### 7.3 The floating-point environment: a determinism failure the specification never mentions
+### 7.3 The floating-point environment: a conforming signer that emits invalid signatures
 
 Every perturbation studied so far rewrites *source*. One does not. The IEEE-754
 rounding direction lives in the x87 control word and in MXCSR; it is per-thread
@@ -903,42 +903,60 @@ process state; and **nothing in the FALCON specification, the C reference, or
 this implementation ever sets it.** Any library in the address space may change
 it, and some do.
 
-With the key and the PRNG state held identical and only the rounding direction
-changed for the signing computation (`scripts/rounding_mode.jl`):
+Holding the key and the PRNG state identical and changing only the rounding
+direction for the signing computation (`scripts/rounding_mode.jl`), every
+signature changes: 1800 of 1800 under each of FE_UPWARD, FE_DOWNWARD and
+FE_TOWARDZERO, against 0 of 1800 for a FE_TONEAREST-versus-FE_TONEAREST control.
 
-| mode | signatures differing |
-|:--|--:|
-| FE_TONEAREST (control) | **0 of 1800** |
-| FE_UPWARD | **1800 of 1800** |
-| FE_DOWNWARD | **1800 of 1800** |
-| FE_TOWARDZERO | **1800 of 1800** |
+The interesting question is *why*, and the answer is not the mechanism the rest
+of this paper is about. Instrumenting the sampler's outputs directly shows that
+**the sampled lattice point is unchanged**:
 
-The rate is 1. Against the 1.9×10⁻⁵ of the strongest source-level difference we
-measured, this is five orders of magnitude larger, and it needs no second
-implementation at all — one implementation suffices, run twice in the same
-binary. The consequence for FIPS 206 is direct: a signature's bytes are not a
-function of (key, message, randomness); they are a function of (key, message,
-randomness, **rounding mode**). A bit-exact known-answer-test requirement is
-unsatisfiable unless the standard also fixes the floating-point environment,
-and no draft text does. (ePrint 2024/1709 §6 mentions the "weak determinism" of
-floating point as "a first way, which we do not explore further"; this
-quantifies it, and it is by far the largest effect in the class.)
+```
+FE_TONEAREST vs FE_UPWARD, 200 signatures
+  sampled lattice point z differs :   0
+  encoded signature s2 differs    : 200
+```
 
-**It does not, however, make the attack easier — and that bounds the whole
-attack family.** A whole-signature flip desynchronises the sampler, so the
-difference is unstructured, which §5 of that paper already identifies as
-useless for key recovery. Confining the flip to a brief window at the tail of
-the traversal, so that only the last two centres are perturbed
-(`scripts/rounding_attack.jl`), gives 0 recoveries in 48000 signature pairs —
-consistent with the ~10⁻⁵ rate we measure for source-level perturbations, not
-better. The reason is structural: key recovery needs the *exact* centre at one
-of the last two calls to be an integer, and that is a property of the key and
-the message, not of the perturbation. Its probability is `2/‖(g,−f)‖² ≈
-1.2×10⁻⁴`, and no perturbation, however large, exceeds it. **Every attack in
-this family is bounded above by that ceiling**, so an adversary needs of order
-10⁴ signature pairs on the same syndrome whatever tool they bring — a bound
-worth stating in a risk assessment, and one that also explains why increasing
-the perturbation strength (§6.6) buys so little.
+The rounding mode does not move the sampler at all — it perturbs the
+*reconstruction*. `sample_preimage` finishes by computing `v = z·B` through
+`mul_fft` and `ifft` and then rounding to integers
+(`s1 = c − round(v0)`, `s2 = −round(v1)`). Under a directed rounding mode the
+iFFT's error is biased rather than cancelling, and `round(v)` lands on the wrong
+integer. The consequence is worse than non-determinism:
+
+| rounding mode | `s1 + s2·h ≡ c (mod q)` | norm bound `‖s‖² ≤ ⌊β²⌋` |
+|:--|--:|--:|
+| FE_TONEAREST (control) | **200 / 200** | 200 / 200 |
+| FE_UPWARD | **0 / 200** | 200 / 200 |
+| FE_DOWNWARD | **0 / 200** | 200 / 200 |
+
+**A conforming signer running in a process where some other component has
+changed the rounding mode silently emits signatures that do not verify** — and
+its own internal check does not catch it, because the norm bound still passes on
+all 200. This is a functional-correctness and availability failure with an
+undocumented dependency on process-global state, and it is invisible to the
+signer. For FIPS 140-3 validation in particular, a known-answer self-test run at
+start-up under the default mode would pass, and every subsequent signature could
+still be invalid.
+
+For FIPS 206 the implication is narrower than "bit-exact KATs need the FP
+environment pinned", and sharper: the specification must state the required
+floating-point environment as a *precondition for correctness*, not merely for
+reproducibility.
+
+**This is not a route to key recovery, and the reason bounds the whole attack
+family.** Since the rounding mode leaves `z` unchanged, it produces no Lemma-1
+event at all. More generally, key recovery through §5.1 requires the *exact*
+centre at one of the last two calls to be an integer, which is a property of the
+key and the message and not of the perturbation; its probability is
+`2/‖(g,−f)‖² ≈ 1.2×10⁻⁴`, and no perturbation, however large, exceeds it.
+Confining a rounding-mode flip to a window at the tail of the traversal
+(`scripts/rounding_attack.jl`) gives 0 recoveries in 48000 signature pairs,
+consistent with that ceiling rather than with any amplification. **Every attack
+in this family needs of order 10⁴ same-syndrome pairs whatever tool is
+brought** — which also explains why increasing the perturbation strength (§6.6)
+buys so little.
 
 ---
 
@@ -1269,7 +1287,7 @@ runs unless a measurement asks otherwise.
 | **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
 | **the replacement countermeasure** (§7.2) | `julia --project=falcon falcon/scripts/snapping.jl` |
 | centres as a linear form in f (§6.4) | `julia --project=falcon falcon/scripts/linear_form.jl` |
-| rounding mode changes every signature (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
+| rounding mode invalidates signatures (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
 | the attack-family ceiling (§7.3) | `julia --project=falcon falcon/scripts/rounding_attack.jl 20 2400 1022` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
