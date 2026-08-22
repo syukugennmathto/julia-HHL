@@ -843,6 +843,51 @@ interior `g ≳ q³` exceeds `2⁵³`, but there an integer centre occurs with
 probability below 10⁻¹⁶ and §6.2 measured zero in 1.02×10⁸ draws, so those
 positions do not need protecting.
 
+### 7.3 The floating-point environment: a determinism failure the specification never mentions
+
+Every perturbation studied so far rewrites *source*. One does not. The IEEE-754
+rounding direction lives in the x87 control word and in MXCSR; it is per-thread
+process state; and **nothing in the FALCON specification, the C reference, or
+this implementation ever sets it.** Any library in the address space may change
+it, and some do.
+
+With the key and the PRNG state held identical and only the rounding direction
+changed for the signing computation (`scripts/rounding_mode.jl`):
+
+| mode | signatures differing |
+|:--|--:|
+| FE_TONEAREST (control) | **0 of 1800** |
+| FE_UPWARD | **1800 of 1800** |
+| FE_DOWNWARD | **1800 of 1800** |
+| FE_TOWARDZERO | **1800 of 1800** |
+
+The rate is 1. Against the 1.9×10⁻⁵ of the strongest source-level difference we
+measured, this is five orders of magnitude larger, and it needs no second
+implementation at all — one implementation suffices, run twice in the same
+binary. The consequence for FIPS 206 is direct: a signature's bytes are not a
+function of (key, message, randomness); they are a function of (key, message,
+randomness, **rounding mode**). A bit-exact known-answer-test requirement is
+unsatisfiable unless the standard also fixes the floating-point environment,
+and no draft text does. (ePrint 2024/1709 §6 mentions the "weak determinism" of
+floating point as "a first way, which we do not explore further"; this
+quantifies it, and it is by far the largest effect in the class.)
+
+**It does not, however, make the attack easier — and that bounds the whole
+attack family.** A whole-signature flip desynchronises the sampler, so the
+difference is unstructured, which §5 of that paper already identifies as
+useless for key recovery. Confining the flip to a brief window at the tail of
+the traversal, so that only the last two centres are perturbed
+(`scripts/rounding_attack.jl`), gives 0 recoveries in 48000 signature pairs —
+consistent with the ~10⁻⁵ rate we measure for source-level perturbations, not
+better. The reason is structural: key recovery needs the *exact* centre at one
+of the last two calls to be an integer, and that is a property of the key and
+the message, not of the perturbation. Its probability is `2/‖(g,−f)‖² ≈
+1.2×10⁻⁴`, and no perturbation, however large, exceeds it. **Every attack in
+this family is bounded above by that ceiling**, so an adversary needs of order
+10⁴ signature pairs on the same syndrome whatever tool they bring — a bound
+worth stating in a risk assessment, and one that also explains why increasing
+the perturbation strength (§6.6) buys so little.
+
 ---
 
 ## 8. The constants
@@ -1154,6 +1199,8 @@ runs unless a measurement asks otherwise.
 | **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
 | **the replacement countermeasure** (§7.2) | `julia --project=falcon falcon/scripts/snapping.jl` |
 | centres as a linear form in f (§6.7) | `julia --project=falcon falcon/scripts/linear_form.jl` |
+| rounding mode changes every signature (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
+| the attack-family ceiling (§7.3) | `julia --project=falcon falcon/scripts/rounding_attack.jl 20 2400 1022` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
