@@ -281,6 +281,15 @@ matches the stored secret up to negation: (f,g) = -(f_true, g_true)
 <span style="color:var(--signal);font-weight:600;">*** 単一の A2 発散ペアから、秘密鍵を完全復元。***</span></pre>
 <p>復元された <span class="mono">(f, g)</span> は符号対称 <span class="mono">(f,g) ↦ (−f,−g)</span> を除いて格納鍵と一致 ― 同じ署名鍵だ。つまり複素除算と <span class="mono">D11</span> は、署名を変えるだけでなく、syndrome を2回署名する derandomized の設定で<strong>鍵を露出させる</strong>のに十分。復元の代数は回帰テスト済み（<span class="mono">test_falcon.jl</span>）。</p>
 
+<h3>なぜ最後の2回が支配的か ― 論文が残した未解決を解いた</h3>
+<p>2024/1709 §6.1 は「整数中心を条件づけると最後の2回が最初の2回より発散しやすいが、<em>理由は完全には分からない</em>」と書いた（sign_dyn/sign_tree の差、FMA では起きない）。綴りが中心に与える摂動 <span class="mono">|Δμ|</span> を全位置で測ると、<strong>木の降下に沿って累積し</strong>、中点で段になる：</p>
+<pre><span class="cm"># scripts/position_profile.jl（位置ブロックごとの平均 |Δμ|）</span>
+pos    0.. 511  (z1, 第1降下) : 2.7e-15 → 1.0e-14
+pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7倍の段</span>
+最初の2回 (0,1)     : 2.7e-15
+最後の2回 (1022,1023): 8.6e-14        <span style="color:var(--signal);font-weight:600;">比 ≈ 32×</span></pre>
+<p>段は構造的だ：<span class="mono">ffSampling</span> は <span class="mono">z1</span> を先に引き、<span class="mono">t0 ← t0 + (t1 − z1)·l10</span> を作ってから <span class="mono">z0</span> を引く。<span class="mono">z0</span>（後半＝最後の2回を含む）の中心は上位 <span class="mono">l10</span> 補正を経由し、丸め差がそこに乗る。前半の中心は経由しない。中心が整数をまたぐのは <span class="mono">|Δμ|</span> が整数までの距離を超えるときなので、32倍大きい <span class="mono">|Δμ|</span> は 32倍多い発散 ― これが非対称性の正体。そして A2（木のみ）では最初の2回の <span class="mono">|Δμ|</span> は<strong>厳密に 0</strong>（第1葉の中心は l10 補正前の純粋な目標 split）なので、A2 の発散は<em>構造的に</em>最後の2回に限られる。敏感位置は固定ではなく、摂動がどこから入るかで決まる。</p>
+
 <span class="secnum">04 — 位置づけ</span>
 <h2>何が新しく、何が新しくないか</h2>
 <p>正直な位置づけが、貢献のほとんどだ。演算の機構、参照実装の 2 モードが発散すること、幅への非感受性 ― すべて ePrint 2024/1709 の結果である。我々はそれらを独立に追認し、2 点を加える。</p>

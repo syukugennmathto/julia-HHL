@@ -366,6 +366,15 @@ matches the stored secret up to negation: (f,g) = -(f_true, g_true)
 <span style="color:var(--signal);font-weight:600;">*** FULL KEY RECOVERY from a single A2 discrepant pair. ***</span></pre>
 <p>The recovered <span class="mono">(f, g)</span> is the stored key up to the negation symmetry <span class="mono">(f,g) ↦ (−f,−g)</span> — the same signing key. So complex division and <span class="mono">D11</span> suffice not merely to change the signature but to <strong>expose the key</strong>, in the derandomized settings where a syndrome is signed twice. The recovery algebra is regression-tested (<span class="mono">test_falcon.jl</span>).</p>
 
+<h3>Why the last two calls dominate — an open question, answered</h3>
+<p>2024/1709 §6.1 reports, and says it does "not fully understand," that conditional on an integer centre the <em>last</em> two calls diverge more readily than the first two (for the <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> difference, not FMA). We measured the perturbation <span class="mono">|Δμ|</span> the respelling puts on the centre at every position — and it <strong>accumulates along the tree descent</strong>, with a sharp step at the midpoint:</p>
+<pre><span class="cm"># scripts/position_profile.jl  (mean |Δμ| per position block)</span>
+pos    0.. 511  (z1, first descent) : 2.7e-15 → 1.0e-14
+pos  512..1023  (z0, second descent): 7.4e-14 → 8.7e-14   <span class="cm"># ~7× step</span>
+first two (0,1)     : 2.7e-15
+last two (1022,1023): 8.6e-14        <span style="color:var(--signal);font-weight:600;">ratio ≈ 32×</span></pre>
+<p>The step is structural: <span class="mono">ffSampling</span> samples <span class="mono">z1</span> first, then forms <span class="mono">t0 ← t0 + (t1 − z1)·l10</span> and samples <span class="mono">z0</span>. Every centre in <span class="mono">z0</span> — the second half, including the last two calls — passes through the top-level <span class="mono">l10</span> correction that carries the rounding difference; the first-half centres do not. A centre crosses an integer only when <span class="mono">|Δμ|</span> exceeds its distance to one, so 32× larger <span class="mono">|Δμ|</span> means ~32× more divergence at the last two — the asymmetry, explained. And for A2 (tree-only) the first-two <span class="mono">|Δμ|</span> is <strong>exactly zero</strong> (the first leaf's centre is a pure target split, reached before any <span class="mono">l10</span>), so A2 divergences are confined to the last two <em>structurally</em>. The sensitive set is not fixed — it depends on where the perturbation enters.</p>
+
 <span class="secnum">04 — Positioning</span>
 <h2>What is new, and what is not</h2>
 

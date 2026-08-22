@@ -32,7 +32,10 @@ alone. Unlike the perturbations that paper studies, these are differences
 between the *specification* and the *reference*, present in both of the
 reference's signing modes, and not removed by its `sign_dyn`/`sign_tree`
 countermeasure. We reproduce that paper's mechanism independently, check its
-Heuristic 1 directly (which it does not), and confirm the effect at n = 1024. Performance: this
+Heuristic 1 directly (which it does not), confirm the effect at n = 1024, and
+**explain the asymmetry it left open** — why the last two sampler calls diverge
+far more readily than the first two — as a perturbation that accumulates along
+the tree descent, 32× larger at the last two calls than the first two. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -489,6 +492,69 @@ reproducing the idiosyncrasy that §7.1 of that paper attributes to the C
 reference's key generation (and which blocks its own countermeasure), from an
 implementation that followed the C key generation without knowing it mattered.
 
+### 6.3 Why the last two calls dominate — resolving an open question of 2024/1709
+
+Section 6.1 of ePrint 2024/1709 reports, and states it does "not fully
+understand," that conditional on an integer centre the **last** two calls
+diverge more readily than the first two, specifically for the `sign_dyn` /
+`sign_tree` (our A1) difference and not for FMA. We give the mechanism, by
+measuring the perturbation `|Δμ| = |μ_C − μ_spec|` the respelling puts on the
+centre at **every** position, over 10⁴ signatures per position
+(`scripts/position_profile.jl`).
+
+For A1, the perturbation is not uniform across the traversal — it accumulates,
+with a sharp step at the midpoint:
+
+```
+positions   0.. 511  (z1, first descent) : mean |Δμ|  2.7e-15 → 1.0e-14
+positions 512..1023  (z0, second descent): mean |Δμ|  7.4e-14 → 8.7e-14
+first two  (0,1):   mean |Δμ| = 2.7e-15
+last two (1022,1023): mean |Δμ| = 8.6e-14      ratio ≈ 32×
+```
+
+The step is structural. `ffSampling` samples `z1` first, directly from the
+split target; then forms `t0 ← t0 + (t1 − z1)·l10` and samples `z0`. Every
+centre in `z0` (the second half, including the last two calls) therefore passes
+through the top-level `l10` correction, which carries the bottom-level rounding
+difference; the centres in `z1` (the first half, including the first two calls)
+do not. A centre diverges only when `|Δμ|` exceeds its distance to the nearest
+integer, so a 32× larger `|Δμ|` yields a ~32× higher conditional divergence
+probability at the last two calls — exactly the asymmetry the paper observed.
+It is A1-specific because FMA perturbs every floating-point operation
+throughout, giving a flat `|Δμ|` profile with no such step, consistent with the
+paper's report that FMA shows no asymmetry.
+
+The same instrument sharpens the A2 result. For A2 (the tree-only respelling),
+`|Δμ|` at the first two calls is **exactly zero** over all 10⁴ draws:
+
+```
+A2   first two: mean |Δμ| = 0.000 (exactly)   last two: 1.1e-14
+```
+
+The first leaf's centre is a pure split of the target `t` (built from `B0`, not
+the tree), reached before any `l10` correction applies, so a respelling that
+changes only the tree cannot move it. A2 divergences are therefore confined to
+the last two calls **structurally**, not merely probabilistically — which is
+why all four A2 divergences we observed (three at n = 512, one at n = 1024) are
+at position 2n−2 or 2n−1 and none at 0 or 1. The sensitive set is not a fixed
+property of FALCON; it depends on where the perturbation source enters the
+computation.
+
+### 6.4 Two directions that did not pan out (recorded honestly)
+
+Two hypotheses we tested and rejected, since the boundary they probe is part of
+the result. **A weak-key class by `‖(g,−f)‖²`**: the last-two rate is
+`1/‖(g,−f)‖²`, but over 3000 keys `‖(g,−f)‖²` is tightly bounded (15078 to
+16822, a 1.09× spread), because key generation rejects anything above `1.17²q`.
+The rate is essentially key-independent; there is no weak-key tail on this
+invariant. **A fifth sensitive position in the interior, for random messages**:
+over ~10⁷ interior draws the near-integer (< 10⁻⁶) count is 21, exactly the ~20
+expected from uniform fractional parts alone, i.e. no integer centres occur in
+the interior — confirming 2024/1709's restriction to the first and last two
+positions holds for random messages. (Whether a chosen-message adversary can
+reach the interior positions, whose denominators are within double precision up
+to the first and last *six* calls, is left open.)
+
 ---
 
 ## 7. Relationship to ePrint 2024/1709
@@ -502,7 +568,9 @@ contribution.
 | mechanism | Lemma 1 (centre) / Lemma 2 (width) | **the same — reproduced independently** |
 | hand-unrolled difference (Class I c) | identified §6.1, countermeasure §7.2 | reproduced as positive control (A1) |
 | complex division, `D11` (Class I a,b) | **not present** | **7.5 × 10⁻⁶ at the key-recovery position; not fixed by §7.2** |
-| Heuristic 1 | consequence measured | **cause measured directly (§6.1)** |
+| Heuristic 1 | consequence measured | **cause measured directly (§6.2)** |
+| last-two-vs-first-two asymmetry | observed, "not fully understood" (§6.1) | **explained: depth-accumulated `l10` perturbation, 32× (§6.3)** |
+| key recovery | described (§5) | **run on our own A2 pair (§6.1)** |
 | even `‖(g,−f)‖²` (§7.1) | noted as a C idiosyncrasy | reproduced independently |
 
 The one genuinely new empirical fact is the A2 arm. Its significance is not that
@@ -788,6 +856,7 @@ runs unless a measurement asks otherwise.
 | divergence rates (§6) | `julia --project=falcon falcon/scripts/divergence_rate.jl 100 1000` |
 | one divergence, mechanism (§6) | `julia --project=falcon falcon/scripts/first_divergence.jl A2 70 534` |
 | key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
+| per-position perturbation profile (§6.3) | `julia --project=falcon falcon/scripts/position_profile.jl 40 250 A1` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
