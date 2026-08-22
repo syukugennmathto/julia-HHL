@@ -554,6 +554,35 @@ at position 2n−2 or 2n−1 and none at 0 or 1. The sensitive set is not a fixe
 property of FALCON; it depends on where the perturbation source enters the
 computation.
 
+
+A follow-up experiment sharpens this into a quantitative rule
+(`scripts/first_two_probe.jl`). Because the first-two centre is `n/q`, an
+attacker who chooses messages can *manufacture* an exact integer centre there,
+one message in about `q/2`. We did: 10 integer centres in 48000 (key, message)
+pairs, matching Heuristic 1's `2/q`. **None of them diverged.** Printing both
+runs' centres shows why: the computed centre is never exactly the integer, it
+sits 1–3 ulp away, and — crucially — *both spellings sit on the same side of it*,
+because their difference is smaller than that shared offset:
+
+```
+call 1   C 22.000000000000007   spec 22.000000000000007   |Δμ| = 0
+call 2   C 42.000000000000021   spec 42.000000000000014   |Δμ| = 7.1e-15
+call 2   C -47.000000000000021  spec -47.000000000000014  |Δμ| = 7.1e-15
+```
+
+So an integer centre is necessary but not sufficient: the straddle also needs
+`|Δμ|` to exceed the spread of the shared rounding offset (~2 ulp ≈ 2.8×10⁻¹⁴ at
+these magnitudes). That gives
+
+    P(straddle | integer centre) ≈ |Δμ| / spread
+
+which is ≈ 0.1 at the first two calls (`|Δμ| ≈ 2.7×10⁻¹⁵`) and saturates at the
+last two (`|Δμ| ≈ 8.6×10⁻¹⁴`). This is how §6.3's 32× perturbation ratio becomes
+a divergence-rate ratio, and it is consistent both with our 0-of-10 and with
+2024/1709's Table 2, where about 30 % of the dyn/tree discrepancies fall at the
+first two calls. It also means a chosen-message adversary gains nothing at the
+first two positions — the only exploitable end is the last two.
+
 ### 6.4 Two directions that did not pan out (recorded honestly)
 
 Two hypotheses we tested and rejected, since the boundary they probe is part of
