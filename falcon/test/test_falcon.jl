@@ -346,6 +346,46 @@
         end
     end
 
+    @testset "the FMA arm, and the parity that closes the first two calls" begin
+        # docs/debug_log.md #070, docs/paper.md sec 6.6.
+        #
+        # (a) FMA_FFT is OFF by default.  Every byte-exact KAT above depends on
+        #     that, so this is the guard against a future edit flipping it.
+        @test Falcon.FMA_FFT[] == false
+
+        # (b) with_fma restores the flag even when the body throws.
+        @test_throws ErrorException with_fma(() -> error("boom"))
+        @test Falcon.FMA_FFT[] == false
+
+        # (c) the arm is not a no-op, and -- the reason it is `fma` and not
+        #     `muladd` -- it is not a no-op in EVERY build configuration.  The
+        #     first version of this arm used `muladd`, which is only permitted
+        #     to fuse: LLVM contracted it inside merge_fft's loop, declined
+        #     inside mul_fft's comprehension, and declined in both under
+        #     --check-bounds=yes, so this very assertion passed under `julia
+        #     script.jl` and failed under `Pkg.test()`.  That is a faithful
+        #     picture of the hazard sec 6.6 is about and a useless experimental
+        #     arm.  `fma` rounds once by specification.
+        let a = ComplexF64(0.1, 1.0), b = ComplexF64(0.2, 0.020000000000000004)
+            @test Falcon._cmul_fma(a, b) != a * b
+        end
+        n = 512
+        v = Float64[Float64(mod(7*i*i + 3i, 12289)) for i in 1:n]
+        w = Float64[Float64(mod(5*i*i + 11i, 12289)) for i in 1:n]
+        @test polymul_fft(v, w) != with_fma(() -> polymul_fft(v, w))
+
+        # (d) the parity theorem of sec 6.6.  With `round` in place of `floor`
+        #     (ePrint 2024/1709 Algorithm 4) the sensitive centres are the
+        #     half-integers, and a first-two centre is N/q with N an integer.
+        #     N/q = m + 1/2 needs 2N = q(2m+1): even on the left, odd on the
+        #     right.  So for odd q it never happens -- part 1 of that
+        #     countermeasure closes the first two sampler calls unconditionally.
+        #     Checked exhaustively over the numerator's residues mod 2q.
+        q = FALCON_512.q
+        @test isodd(q)
+        @test !any(N -> mod(2N, 2q) == mod(q, 2q), 0:(2q - 1))
+    end
+
     @testset "key recovery algebra (ePrint 2024/1709 sec 5.1)" begin
         # The identity behind scripts/key_recovery.jl, which recovers the
         # private key from a single A2 discrepant pair (docs/paper.md sec 6.1).

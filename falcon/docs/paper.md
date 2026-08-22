@@ -47,7 +47,19 @@ divergent pairs in 160000 signatures. Part 2 *is* deployable (we show a
 one-line key-generation change yields odd norms, 40 of 40), so the two parts
 must be mandated together and a standard must say so. We also give a simpler
 alternative that needs no key-generation change: snapping the centre to its
-exact rational value, which the signer can do because it knows the denominator. Performance: this
+exact rational value, which the signer can do because it knows the denominator.
+Two further results concern the sampler calls that 2024/1709 dismisses. First,
+the centre of the first two calls is exactly `(c·f)_{n/2−1}/q` — a **public
+linear form in the secret** — so an integer centre there is one `F_q` equation
+on `f`; from `n−1` such **events**, with no signature difference vectors and no
+lattice reduction, a 512 × 512 Gaussian elimination returns the private key,
+which we run. That paper dismisses those positions because the difference vector
+is not short enough, a reason this channel does not depend on. Second, the
+oracle such a channel needs exists exactly inside a two-sided window on the
+perturbation size, whose ends we measure (2.8 × 10⁻¹⁴ to 4.9 × 10⁻¹¹, 3.2
+decades); our own respellings sit below it, but **C99 `FP_CONTRACT` — GCC's
+default `-ffp-contract=fast` against clang's off — lands inside it**, and the
+resulting one-bit oracle is 83 % informative. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -156,18 +168,37 @@ for this particular question.
    not removed by that paper's `sign_dyn`/`sign_tree` countermeasure, and
    **from one such pair we recover the private key** (§6.1). The effect
    replicates at n = 1024.
-5. **An honest three-way performance comparison** (§9) against a range of C
+5. **A second key-recovery channel, at the positions that paper dismisses**
+   (§6.4, §6.5). The first two sampler centres are the public linear form
+   `(c·f)_{n/2−1}/q`, so an integer centre there is one `F_q`-linear equation on
+   `f` with coefficients the adversary computes from the message. From `n−1`
+   such events we recover the key by Gaussian elimination — no difference
+   vectors, no lattice reduction, 49 seconds. 2024/1709 §5 dismisses these
+   positions on the grounds that the difference vector is not short enough; the
+   channel never reads the difference vector, so the objection does not reach
+   it. The channel also needs strictly less of an adversary: one bit per query.
+6. **The oracle that channel needs, as a measured two-sided window** (§6.6). An
+   implementation difference is an oracle for the event exactly when its
+   perturbation exceeds the *shared* rounding error (below which the two
+   implementations' `floor` cannot disagree) and stays below the interior
+   false-positive ceiling. We measure both ends — 2.8 × 10⁻¹⁴ and 4.9 × 10⁻¹¹,
+   3.2 decades — place this paper's own respellings *below* the window, and
+   exhibit a difference *inside* it that requires no disagreement between
+   implementers at all: C99 `FP_CONTRACT`, i.e. building the same reference with
+   GCC rather than clang at their defaults.
+7. **An honest three-way performance comparison** (§9) against a range of C
    builds (two compilers, three optimization levels, emulated and native
    floating point) and the Python reference, reported as distributions rather
    than single numbers.
-6. **A cross-scheme scoping** (§11.1): from the reference code of Mitaka,
+8. **A cross-scheme scoping** (§11.1): from the reference code of Mitaka,
    Antrag and HAWK, the sensitivity requires both floating point in the signing
    sampler and a small-denominator rational centre — Falcon alone has both, so
    the hazard is specific to its design, not generic to lattice hash-and-sign.
-7. **An evaluation of the proposed countermeasure** (§7.1): we implement ePrint
+9. **An evaluation of the proposed countermeasure** (§7.1): we implement ePrint
    2024/1709's Algorithm 4, verify the rational structure of the centres
-   directly, and show that its *first part alone* immunises only the harmless
-   sampler positions — recovering keys, 3 of 3, with that part deployed. We also
+   directly, and show that its *first part alone* leaves the cheapest
+   key-recovery positions exposed — recovering keys, 3 of 3, with that part
+   deployed — while closing the expensive channel of §6.5 unconditionally. We also
    show its second part is deployable (contrary to what the reference key
    generator suggests), so the normative point is that the two must be mandated
    **together**. §7.2 gives a simpler alternative requiring no key-generation
@@ -686,10 +717,133 @@ script draws the syndromes uniformly rather than hashing messages — justified 
 matching the prediction (2.08 × 10⁻⁴ observed against 1.63 × 10⁻⁴ predicted,
 `scripts/first_two_probe.jl`) — but we did not re-run it with real hashes, and we
 say so rather than implying we did. The oracle that tells an adversary *which*
-messages produced an event is exactly what §6.4 flags as missing, and the
-respellings of this paper do not supply one.
+messages produced an event is exactly what §6.4 flags as missing; §6.6 supplies
+the two-sided condition for one to exist, measures both sides, and identifies a
+difference that meets it.
 
-### 6.6 Two directions that did not pan out (recorded honestly)
+### 6.6 The oracle the event channel needs: a window, and a compiler flag inside it
+
+§6.5 solves; it does not observe. This subsection supplies the missing half as a
+*two-sided condition*, measures both sides, and then asks whether any realistic
+difference between two implementations lands between them
+(`scripts/window.jl`).
+
+**The lower edge is the shared rounding error.** At an event the true centre is
+an exact integer `m`, but both implementations compute `m + η` with the *same*
+accumulated error `η` — the FFT, the tree and the descent are common to them,
+and only the disputed operation differs. `floor` disagrees only if the two
+perturbed values fall on opposite sides of `m`, so a difference `|Δμ| ≪ |η|`
+cannot straddle no matter how many events occur. Over 200 manufactured events
+(2452134 uniform syndromes, event rate 8.16 × 10⁻⁵ against `1/q` = 8.14 × 10⁻⁵):
+
+```
+|eta| at call 1:  min 0   median 2.84e-14   max 1.14e-13
+sign(eta) > 0 in 153 of 200
+```
+
+Injecting a controlled per-call perturbation `δ·U[−1,1]` and measuring
+`P(straddle at call 1 | integer centre)` traces the edge directly:
+
+| δ | 0 | 10⁻¹⁶ | 10⁻¹⁵ | 10⁻¹⁴ | 10⁻¹³ | 10⁻¹² | 10⁻¹¹ | 10⁻¹⁰ | 10⁻⁸ |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| P(straddle) | 0.000 | 0.000 | 0.000 | 0.030 | 0.290 | 0.425 | 0.435 | 0.440 | 0.440 |
+
+The curve turns over exactly at `|η|` and saturates near `1/2`, as it must.
+This is the quantitative form of the negative result of §6.4: the respellings of
+this paper produce `|Δμ| = 2.7 × 10⁻¹⁵` (A1) and *exactly zero* (A2) at the
+first two calls, both below the edge — which is why `scripts/first_two_probe.jl`
+manufactured ten events and saw zero straddles. That experiment was not
+unlucky; it was on the wrong side of a threshold we can now name.
+
+**The upper edge is the interior false-positive rate.** The same perturbation
+straddles the ≈ 2n interior centres, whose fractional parts are essentially
+uniform, at a rate linear in `δ`. Measured over 1200 syndromes per point:
+`rate = κδ` with `κ = 1.62 × 10³` (the four points give 1.42, 2.06, 1.83 and
+1.39 × 10³), consistent with the `≈ 2n` of Lemma 1 and with the coarser sweep of
+§6.8. Those divergences carry no equation. The solve of §6.5 needs `n−1` rows
+that are all true, so it tolerates a false fraction of about `1/n`, giving
+`κδ ≤ (1/n)(1/q)·P(straddle)` and
+
+```
+lower edge  ~ |eta|                 = 2.84e-14
+upper edge  = (1/n)(1/q)(1/2)/kappa = 4.89e-11
+width                               = 3.24 decades
+```
+
+**A difference that lands inside it.** The window is not merely non-empty; a
+difference that requires no disagreement between implementers at all sits in it.
+C99 6.5p8 permits a compiler to contract `a*b + c` into a single fused
+multiply-add with one rounding instead of two, under `FP_CONTRACT`. GCC's
+default is `-ffp-contract=fast`; clang's and MSVC's, for standard C, is off. Both
+are conforming, and the FALCON reference sets neither. `FMA_FFT`
+(`src/fft.jl`) makes this an arm: the same source, contracted or not.
+
+The arm uses `fma`, not `muladd`, and the reason is worth one sentence because it
+is the same phenomenon one level up. `muladd` — like `a*b + c` in C — is only
+*permitted* to fuse. On this machine LLVM contracted it inside `merge_fft`'s
+loop, declined inside `mul_fft`'s comprehension, and declined in both when the
+package was compiled with `--check-bounds=yes`, so the first version of this arm
+perturbed differently under `julia script.jl` than under `Pkg.test()`. That is a
+faithful picture of the hazard and a useless experimental instrument. `fma`
+rounds once by specification, so the arm is reproducible, and it measures the
+*upper* end of what a contracting compiler does rather than one sample of it.
+
+```
+|dmu| first two : median 1.42e-14  max 1.07e-13  (exactly zero in 480 of 2400)
+|dmu| interior  : median 2.84e-14  max 1.48e-12
+|dmu| last two  : median 1.71e-13  max 1.25e-12
+on 200 manufactured events: 33 straddled call 1
+```
+
+`1.42 × 10⁻¹⁴` is inside the window, near its lower edge, and the straddle
+probability it buys is 0.165 (33/200; an independent scan over calls 1 *and* 2
+gives 5/26 = 0.19). So GCC-built and clang-built copies of the same reference
+implementation, on the same machine, constitute an oracle for the event channel
+of §6.5.
+
+**How noisy that oracle is.** Scanning 150000 syndromes with one arm and running
+the other only on the hits:
+
+```
+first two : 26 integer centres (rate 1.73e-4, 2/q = 1.63e-4),  5 straddled -> 3.33e-5
+last two  : 20 integer centres (rate 1.33e-4),                 1 straddled -> 6.67e-6
+```
+
+Five of the six disagreements carry an `F_q` equation: the one-bit oracle is
+**83 % informative** (a small sample — the binomial interval runs from 36 % to
+100 % — but the direction is the one the mechanism predicts). That direction is
+§6.3 running backwards: at the last two calls the *shared* error `η` is an order
+of magnitude larger, so the same `|Δμ|` straddles there far less often, 1 of 20
+against 5 of 26. At 3.33 × 10⁻⁵ informative events per query, `n−1 = 511` rows
+cost ≈ 1.5 × 10⁷ signature queries, after which §6.5's Gaussian elimination
+returns `f` in 49 seconds.
+
+**What this is worth, stated against the alternative.** Under the same FMA
+oracle the last-two channel of 2024/1709 §5.1 is also open, at 6.67 × 10⁻⁶ per
+query, so one exploitable pair costs ≈ 1.5 × 10⁵ queries — about a hundred times
+cheaper than the event channel. We are not claiming the faster attack. Three
+things are nevertheless true and are the point:
+
+1. The reason 2024/1709 §5 gives for dismissing the first two positions — that
+   the difference vector is not short enough — is not a reason. The channel does
+   not read the difference vector.
+2. The event channel needs strictly less: one bit per query. §5.1 needs the two
+   signatures themselves. Any deployment that reveals only *that* two
+   computations disagreed — a redundancy-based fault check that aborts on
+   mismatch is the obvious one — leaks through this channel and not through §5.1.
+3. It survives a countermeasure that closes only the last two positions. That
+   matters because §7.1's part 2 is justified in exactly those terms.
+
+**And a positive result for the countermeasure.** Part 1 of §7.1 alone closes
+this channel completely, and unconditionally rather than statistically. With
+`round` in place of `floor` the sensitive centres are the half-integers, and a
+first-two centre is `N/q` with `N ∈ Z`; `N/q = m + 1/2` would need `2N =
+q(2m+1)`, even on the left and odd on the right, so it never happens for odd
+`q`. That is a proof, not a measurement, and it agrees with the count in
+`scripts/denominator_check.jl` (calls 1–2: five integer centres, zero
+half-integer). We had recorded that count without noticing it was forced.
+
+### 6.7 Two directions that did not pan out (recorded honestly)
 
 Two hypotheses we tested and rejected, since the boundary they probe is part of
 the result. **A weak-key class by `‖(g,−f)‖²`**: the last-two rate is
@@ -704,7 +858,7 @@ positions holds for random messages. (Whether a chosen-message adversary can
 reach the interior positions, whose denominators are within double precision up
 to the first and last *six* calls, is left open.)
 
-### 6.7 The leak is structural, not generic rounding
+### 6.8 The leak is structural, not generic rounding
 
 Injecting a uniform perturbation `ε` at every sampler centre and measuring the
 divergence rate (`scripts/precision_law.jl`) confirms Lemma 1's linear law
@@ -810,13 +964,19 @@ Measured, over 100000 samples at each end:
 
 (Predicted densities `1/q = 8.1×10⁻⁵` and `1/t = 6.1×10⁻⁵` give expectations
 8.1, 6.1 and 6.1; the observed 11 is high at `p ≈ 0.04` but of the predicted
-order.) And the first two calls are precisely the *harmless* ones — §5 of that
-paper obtains from them only "a short lattice vector… not expected to be short
-enough to make key recovery feasible" — while the last two are the full
-key-recovery positions. So under `floor`, 7 of 12 exposures sit at the dangerous
+order.)
+
+What that trade is worth depends on which positions matter, and §6.5 changes the
+answer 2024/1709 assumes. The first two calls are *not* harmless: they yield full
+key recovery by linear algebra over `F_q`. But they are the expensive channel —
+≈ 1.5 × 10⁷ queries under the oracle of §6.6, against ≈ 1.5 × 10⁵ for the last
+two. So part 1 alone closes the expensive channel completely (and
+unconditionally: `q` is odd, §6.6) and leaves the cheap one untouched. Under
+`floor`, 7 of 12 measured exposures sit at the full-key-recovery-by-difference
 end; under `round` without the key-generation change, **all 11 do**. The
-countermeasure does not reduce key-recovery exposure; it concentrates what
-remains onto the positions that matter.
+countermeasure does not reduce the cheapest key-recovery exposure; it removes
+the costly channel and concentrates what remains onto the position that is
+already the attacker's best.
 
 **(iv) With part 1 alone deployed, key recovery still succeeds.** We ran the
 whole attack against it (`scripts/countermeasure_break.jl`): sign with
@@ -872,20 +1032,24 @@ protection at exactly the positions that leak the key. A standard adopting
 Algorithm 4 must mandate the key-generation change in the same clause and say
 explicitly that neither part alone suffices.
 
-With `t = ‖(g,−f)‖²` odd,
-`m₂ = t² − 2u²` and `m₃ = t³ − 2t(u²+v²+w²) + 2u(v−w)²` are odd as well
-(odd − even = odd), so all six in-precision denominators are odd and half-integer
-centres cannot occur anywhere; that argument is sound. The gap is one of
-deployment, not of mathematics: part 2 is unavailable on the reference key
-generator (0 odd keys in 3200 generated), so what an implementer can actually
-deploy today is part 1 alone, and part 1 alone leaves the key-recovery exposure
-untouched. Any FIPS 206 text that adopts the rounding sampler **must** adopt the
-key-generation parity change in the same breath, and must say so explicitly.
+The mathematics of the full countermeasure is sound, and worth stating because
+it is what makes the two-part mandate sufficient rather than merely necessary.
+With `t = ‖(g,−f)‖²` odd, `m₂ = t² − 2u²` and `m₃ = t³ − 2t(u²+v²+w²) +
+2u(v−w)²` are odd as well (odd − even = odd), so all six in-precision
+denominators are odd, and by the parity argument of (iii) a half-integer centre
+cannot occur at any of them. Both parts together therefore close every
+in-precision position. The gap we identify is one of *adoption*, not of
+mathematics or of deployability: an implementer who reads Algorithm 4 as "a
+sampler change" and stops there gets no protection at the position that leaks
+the key most cheaply. Any FIPS 206 text that adopts the rounding sampler
+**must** adopt the key-generation parity change in the same clause, and must say
+that neither part alone suffices.
 
 ### 7.2 A countermeasure that needs no key-generation change
 
-The break in §7.1 is a deployment failure, not a mathematical one, and it
-suggests its own repair. At the sensitive positions the exact centre is a
+§7.1's finding is about adoption, not mathematics, and it suggests its own
+repair — one whose correctness does not depend on an implementer adopting two
+changes rather than one. At the sensitive positions the exact centre is a
 rational `n/g` whose denominator the **signer already knows**: `g = q` at the
 first two calls, `g = ‖(g,−f)‖²` at the last two. The floating-point centre
 `μ̂` approximates `n/g` to about 10⁻¹³, so `g·μ̂` sits within `g·10⁻¹³ ≈ 1.6×10⁻⁹`
@@ -943,12 +1107,22 @@ has **almost no statistical power**: with near-integer densities of ≈8×10⁻�
 ≈6×10⁻⁵ at four snapped positions, the expected number of changes in 1200
 signatures is ≈0.3, so the observation confirms only that snapping is a no-op
 away from a boundary, which holds by construction. A distributional test with
-the power of the χ² we ran for Algorithm 4 has not been done. Fourth, our
-implementation (`fld(round(Int128, big(g)*mu), big(g))`) allocates and is not
-constant-time, and snapping with `floor` admits `r = μ − s` outside `[0,1)` when
-`μ̂` falls just below the true integer centre; a deployable version needs a
-constant-time, allocation-free formulation and a statement of what `BerExp` does
-with a negative `r`. We present snapping as a promising direction, not a
+the power of the χ² we ran for Algorithm 4 has not been done. Fourth — and this is the caveat we would raise first if we were reviewing
+this — our implementation (`fld(round(Int128, big(g)*mu), big(g))`) puts an
+arbitrary-precision divide on the sampler's hot path, and its divisor `g =
+‖(g,−f)‖²` at the last two calls is **secret**. A `BigInt` division is
+data-dependent in both time and allocation, so as written this countermeasure
+would replace a floating-point determinism hazard with a timing channel on the
+secret key — a strictly worse trade for a deployed signer, and a reason a
+standards body should not adopt this formulation as it stands. The fix is
+straightforward in principle (`g < 2⁵³` and `|n| < 2⁶³` at every snapped
+position, so a fixed-width `Int128` multiply plus a constant-time division by a
+secret 53-bit divisor suffices, and the divisor is fixed per key so a
+precomputed reciprocal is available) but we have neither implemented nor
+measured it, and §10's scope means we did not attempt the analysis. Separately,
+snapping with `floor` admits `r = μ − s` outside `[0,1)` when `μ̂` falls just
+below the true integer centre; a deployable version needs a statement of what
+`BerExp` does with a negative `r`. We present snapping as a promising direction, not a
 finished countermeasure.
 
 ### 7.3 The floating-point environment: a conforming signer that emits invalid signatures
@@ -1011,7 +1185,7 @@ Confining a rounding-mode flip to a window at the tail of the traversal
 (`scripts/rounding_attack.jl`) gives 0 recoveries in 48000 signature pairs,
 consistent with that ceiling rather than with any amplification. **Every attack
 in this family needs of order 10⁴ same-syndrome pairs whatever tool is
-brought** — which also explains why increasing the perturbation strength (§6.7)
+brought** — which also explains why increasing the perturbation strength (§6.8)
 buys so little.
 
 ---
@@ -1083,7 +1257,9 @@ Reading the ratios from the Julia -O2 row:
 
 - **Verification: this implementation is the fastest measured, C included** —
   0.015 ms against the best C build's 0.0165 ms (≈ 1.1×) and gcc -O2's 0.026 ms
-  (≈ 1.6×), and **235× faster than the Python reference**. Verification is
+  (≈ 1.6×), and **235× faster than the Python reference**. The 1.1× is inside
+  the spread that compiler and optimization level alone produce, so the claim we
+  would defend is "competitive with C", not a ranking (§12.8). Verification is
   NTT-heavy integer work with no sampler and no big integers, which is where
   Julia's arrays and LLVM are at their best.
 - **Signing: ≈ 1.8× faster than the emulated C build** (the one most deployed
@@ -1245,30 +1421,58 @@ general lattice-signature guideline.
    order 10⁻⁵. We report this as "comparable," not as an ordering.
 3. **The asymmetry explanation is a mechanism, not a calibrated model.** §6.3
    measures the perturbation magnitude `|Δμ|` per position (32× larger at the
-   last two calls) and §6.3's follow-up converts it to a straddle probability
-   `≈ |Δμ|/spread`. Those two give ratios of 32× and 5–10× respectively, and
-   2024/1709's Table 2 30/70 split implies ≈3× after correcting for the density
-   difference — three numbers spanning a factor of ten, which we call consistent
-   in direction but have not reconciled quantitatively. The only direct test of
-   the conditional probability at the first two calls is 0 of 10 manufactured
-   integer centres, which cannot distinguish `P = 0.1` from `P = 0`. The
-   mechanism (perturbation accumulating through the `l10` correction) we regard
-   as established; the quantitative law we do not.
-4. **Our measured rates are last-two-only.** `divergence_rate.jl` and
+   last two calls) and converts it to a straddle probability `≈ |Δμ|/spread`.
+   Those two give ratios of 32× and 5–10× respectively, and 2024/1709's Table 2
+   30/70 split implies ≈ 3× after correcting for the density difference — three
+   numbers spanning a factor of ten, which we call consistent in direction but
+   have not reconciled quantitatively. §6.6 supplies the missing calibration in
+   one direction only: it measures `P(straddle | integer centre)` as a function
+   of `|Δμ|` at the *first two* calls, over 200 manufactured events, and shows
+   the curve turns over at the shared rounding error `|η|`. The same curve at
+   the last two calls is inferred from the 1/20 straddle rate of §6.6's noise
+   scan, not measured over a comparable sample. The mechanism we regard as
+   established; the quantitative law we do not.
+4. **Our measured respelling rates are last-two-only.** `divergence_rate.jl` and
    `divergence_accum.jl` hold the message fixed, and §6.2 shows the first-two
    centres do not depend on the signing randomness, so across 525000 A1
    signatures there are only 100 independent first-two centres. The A1 rate we
    report is therefore not directly comparable to 2024/1709's Table 2, which
    includes first-two events; the comparison in §6 should be read with that
    caveat.
-5. **A withdrawn claim.** An earlier version of this work stated that part 2 of
+5. **The event channel's oracle is demonstrated, its end-to-end attack is not.**
+   §6.5 runs the solve and §6.6 measures an oracle that satisfies its two-sided
+   condition, but we did not run the two together: at 3.33 × 10⁻⁵ informative
+   events per query, collecting `n−1 = 511` rows needs ≈ 1.5 × 10⁷ signature
+   pairs, on the order of a day in this harness, which we did not spend. What is
+   measured is each half; what is arithmetic is their composition. We also draw
+   syndromes uniformly rather than hashing messages (§6.5), and the ≈ 17 % of
+   oracle reports that carry no equation (§6.6) would have to be filtered — by
+   the sparsity of the difference, which is available only to an adversary who
+   sees more than the one bit the channel is claimed to need. That 17 % rests on
+   6 observed disagreements and is the loosest number in this paper. A reader should
+   treat §6.5 + §6.6 as a *channel with its two ends measured*, not as an
+   executed end-to-end key recovery.
+6. **The FMA arm is a model of a compiler, not a compiler.** §6.6 contracts the
+   FFT's complex products with `fma` because that is the strongest thing
+   `-ffp-contract=fast` may do to the reference's `FPC_MUL`. We did not build
+   the C reference both ways and diff the signatures. A real GCC build will
+   contract *some* subset of the sites we contract — as our own first attempt
+   with `muladd` demonstrated, the subset is not predictable from the source —
+   so the perturbation we report is an upper bound on that build's, and a build
+   that contracts too few sites could fall below the window's lower edge.
+   Confirming the oracle on two actual C builds is the obvious next experiment
+   and we flag it as not done.
+7. **A withdrawn claim.** An earlier version of this work stated that part 2 of
    the §7.1 countermeasure was undeployable, from 0 odd-norm keys in 3200. That
    was an argument from absence and it was wrong; §7.1(v) reports the
    measurement that refutes it. The corrected claim is narrower and is the one
    made here.
-4. **One machine.** The performance spread is across compilers and optimization
-   levels, not hardware.
-5. **FALCON-1024** is measured at lower volume (350000 signatures, one event);
+8. **One machine.** The performance spread of §9 is across compilers and
+   optimization levels, not hardware, and the margins at verification (≈ 10 %
+   over the fastest C build) are inside the spread that build options alone
+   produce. The robust reading is "competitive with C at verification", not a
+   ranking.
+9. **FALCON-1024** is measured at lower volume (350000 signatures, one event);
    the rate estimate there is loose (95 % CI 7 × 10⁻⁸ … 1.6 × 10⁻⁵), but the one
    event carries the full mechanism, so replication is established even though
    the rate is not pinned.
@@ -1281,17 +1485,42 @@ If FIPS 206 requires bit-exact KAT agreement, then:
 
 1. **Pin the spellings of §5.1.** Give complex division, the `D11` computation
    and the bottom-level `ffSampling` block as explicit operation sequences, or
-   adopt ePrint 2024/1709 §7.1's structural fix (sample the centre with `round`
-   rather than `floor`, and require `‖(g,−f)‖²` odd) — the latter removes the
-   sensitivity itself rather than pinning each instance, and is the more robust
-   choice. Note that adopting it also requires relaxing the reference's
-   key-generation parity condition, which currently forces `‖(g,−f)‖²` even
-   (§6.1).
-2. **Publish `fpr_inv_sigma` at full precision** rather than leaving it to be
+   adopt ePrint 2024/1709 §7.1's structural fix, which removes the sensitivity
+   itself rather than pinning each instance and is the more robust choice.
+   Adopting it has two riders that the source paper does not spell out and a
+   standard would have to:
+   - **Mandate both parts in the same clause.** The rounding sampler alone
+     closes the first two sampler calls unconditionally (`q` is odd, §6.6) but
+     leaves the last two — the cheapest key-recovery positions — exactly as
+     exposed as `floor` did (§7.1 iii, iv). Neither part alone suffices.
+   - **Relax the key-generation parity condition.** The reference forces
+     `‖(g,−f)‖²` even; requiring it odd needs one of the two coefficient-sum
+     parities dropped, which is deployable — 40 of 40 solver successes, all with
+     odd norms (§7.1 v) — but is a normative change to key generation, not an
+     implementation note.
+2. **State that a partial fix at the last two positions is not a fix.** §6.5
+   recovers the key from *first-two* events alone, by linear algebra over `F_q`,
+   so the reason 2024/1709 §5 gives for treating those positions as harmless
+   does not hold. Any countermeasure justified by "the first two calls yield
+   only a short lattice vector" needs a different justification.
+3. **Say whether `FP_CONTRACT` is in scope.** C99 6.5p8 lets a conforming
+   compiler contract `a*b + c` into one fused multiply-add; GCC does so by
+   default and clang does not. §6.6 measures that this difference alone perturbs
+   the first-two sampler centres by ≈ 1.4 × 10⁻¹⁴, inside the window in which it
+   becomes a key-recovery oracle. A specification that requires bit-exact
+   signatures must say `#pragma STDC FP_CONTRACT OFF` (or forbid the affected
+   expressions), because no amount of care in *writing* the reference pins this.
+4. **Say whether the floating-point environment is in scope.** §7.3 shows a
+   signer that is conforming in every respect except the ambient IEEE-754
+   rounding direction emits signatures that **fail verification** — 0 of 200
+   valid under FE_UPWARD and FE_DOWNWARD — while still satisfying the norm
+   bound. This is a correctness requirement, not only a determinism one, and no
+   current text states it.
+5. **Publish `fpr_inv_sigma` at full precision** rather than leaving it to be
    derived from a rounded σ, and state whether intermediate values are within
    KAT scope.
-3. **State σ_min's ε**, or its derivation.
-4. **State the SamplerZ byte-assembly convention** alongside the vectors.
+6. **State σ_min's ε**, or its derivation.
+7. **State the SamplerZ byte-assembly convention** alongside the vectors.
 
 The draft NIST comment built from these points is in `docs/nist_comment_draft.md`
 (to be posted when the FIPS 206 IPD appears).
@@ -1308,12 +1537,117 @@ signature, at the position where a known attack turns one discrepant pair into
 full key recovery, and are not removed by the countermeasure for the previously
 known instance. The mechanism is the one ePrint 2024/1709 identified; the source
 is not. The right fix is structural, and the specification should either adopt it
-or pin the arithmetic. Along the way, an implementation in a language that cannot
+or pin the arithmetic.
+
+Two of the results point past this implementation. The first two sampler centres
+are a public linear form in the secret, so an integer centre there is one `F_q`
+equation on the key — and `n−1` of those *events*, with no signature difference
+vectors and no lattice reduction, give the key back in a `512 × 512` Gaussian
+elimination. That contradicts nothing in 2024/1709's mathematics; it contradicts
+the sentence in which that paper sets those positions aside, because the reason
+given there is about the difference vector and this channel does not read it.
+And the oracle such a channel needs turns out to live in a window barely three
+decades wide, whose lower end is not a matter of anyone's precision but of the
+rounding error the two implementations *share*. Our own respellings fall below
+that window. The default of a mainstream C compiler falls inside it. That is the
+form the problem takes when a signature is a function of floating-point
+arithmetic: the dangerous difference is not the one an implementer chooses, it
+is the one nobody wrote down.
+
+Along the way, an implementation in a language that cannot
 hide its own runtime variance turns out to be an unexpectedly clean instrument
 for seeing specification variance — and, incidentally, one that verifies FALCON
 signatures faster than any C build we measured, while remaining a factor slower
 at the floating-point-bound and big-integer-bound operations where a decade of C
 optimization shows.
+
+---
+
+## References
+
+Bibliographic metadata below is given by the identifier we can verify from the
+artefacts we actually read — an ePrint number, a repository, or a published
+standard document. Where a venue and year appear, they are ones stated in the
+document itself. This environment had no reliable network access, so we have
+deliberately not filled in page numbers, DOIs or proceedings volumes from
+memory; the identifiers are sufficient to locate every item unambiguously.
+
+**Primary artefacts of this paper.**
+
+- [FALCON] P.-A. Fouque, J. Hoffstein, P. Kirchner, V. Lyubashevsky, T. Pornin,
+  T. Prest, T. Ricosset, G. Seiler, W. Whyte, Z. Zhang. *Falcon: Fast-Fourier
+  Lattice-based Compact Signatures over NTRU.* NIST PQC round-3 specification.
+  The document, the C reference implementation and the Python reference
+  implementation of the submission package are the three artefacts §4 reconciles
+  against; §8 cites its tables by number.
+- [FIPS204] NIST, *FIPS 204: Module-Lattice-Based Digital Signature Standard
+  (ML-DSA)*. Cited in §11 for its explicit "No Floating-Point Arithmetic"
+  provision.
+- [FIPS205] NIST, *FIPS 205: Stateless Hash-Based Digital Signature Standard
+  (SLH-DSA)*.
+- [FIPS206] NIST, *FIPS 206: FN-DSA* — announced, initial public draft not
+  published at the time of writing. §13 is addressed to it.
+- [IEEE754] IEEE Std 754-2019, *IEEE Standard for Floating-Point Arithmetic*.
+  §7.3 concerns its rounding-direction attribute, which is dynamic process state
+  in every mainstream C implementation.
+- [C99] ISO/IEC 9899:1999, *Programming languages — C*, §6.5p8 and the
+  `FP_CONTRACT` pragma. This is the licence under which GCC's default
+  `-ffp-contract=fast` contracts `a*b + c`; §6.6 measures what that does to a
+  FALCON signature.
+
+**The closest related work.**
+
+- [LTYZ25] X. Lin, M. Tibouchi, Y. Yu, S. Zhang. *Do Not Disturb a Sleeping
+  Falcon: Floating-Point Error Sensitivity of the Falcon Sampler and Its
+  Consequences.* ePrint 2024/1709; EUROCRYPT 2025. Sections 6 and 7 of this
+  paper state clause by clause which of our findings reproduce theirs, which
+  extend them, and which correct them.
+
+**Algorithms this implementation follows.**
+
+- [DP16] L. Ducas, T. Prest. *Fast Fourier Orthogonalization.* The `ffLDL` tree
+  and the fast-Fourier nearest-plane sampler of §2.1.
+- [GPV08] C. Gentry, C. Peikert, V. Vaikuntanathan. *Trapdoors for Hard
+  Lattices and New Cryptographic Constructions.* STOC 2008. The hash-and-sign
+  framework FALCON instantiates.
+- [Klein00] P. Klein. *Finding the closest lattice vector when it's unusually
+  close.* SODA 2000. The randomized nearest-plane algorithm `ffSampling`
+  specialises.
+- [PP19] T. Pornin, T. Prest. *More Efficient Algorithms for the NTRU Key
+  Generation Using the Field Norm.* ePrint 2019/015. The tower solver of §9's
+  key generation.
+- [HPRR20] J. Howe, T. Prest, T. Ricosset, M. Rossi. *Isochronous Gaussian
+  Sampling: From Inception to Implementation.* PQCrypto 2020. The isochronous
+  `SamplerZ`/`BerExp` the specification adopts; §11 explains why isochrony is a
+  different axis from the one measured here.
+- [Smith62] R. L. Smith. *Algorithm 116: Complex division.* The algorithm
+  Julia's built-in complex `/` implements, and one half of Class I(a) in §5.1.
+
+**Attacks and leakage on FALCON.**
+
+- [FKTWY20] P.-A. Fouque, P. Kirchner, M. Tibouchi, A. Wallet, Y. Yu. *Key
+  Recovery from Gram–Schmidt Norm Leakage in Hash-and-Sign Signatures over NTRU
+  Lattices.* ePrint 2019/1180; EUROCRYPT 2020.
+- [KA21] E. Karabulut, A. Aysu. *FALCON Down: Breaking FALCON Post-Quantum
+  Signature Scheme through Side-Channel Attacks.* DAC 2021.
+- [GMRR22] M. Guerreau, A. Martinelli, T. Ricosset, M. Rossi. *The Hidden
+  Parallelepiped Is Back Again: Power Analysis Attacks on Falcon.* TCHES 2022.
+
+**The schemes compared in §11.1**, read as reference implementations rather than
+as papers, since the question there was what the code does:
+
+- [Mitaka] `espitau/Mitaka-EC22` — the reference implementation accompanying
+  *Mitaka: A Simpler, Parallelizable, Maskable Variant of Falcon*.
+- [Antrag] `mti/antrag` — the reference implementation accompanying *Antrag*.
+- [HAWK] `mjosaarinen/lil-hawk-py` — a KAT-validated Python implementation of
+  HAWK, used because its integer sampler is legible in a way the optimised C is
+  not.
+
+**Statistics.**
+
+- [Garwood36] F. Garwood. *Fiducial limits for the Poisson distribution.* The
+  exact Poisson interval used for every rate in §6 and §7; two-sample rate
+  comparisons use the conditional-binomial test.
 
 ---
 
@@ -1336,15 +1670,19 @@ runs unless a measurement asks otherwise.
 | one divergence, mechanism (§6) | `julia --project=falcon falcon/scripts/first_divergence.jl A2 70 534` |
 | key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
 | per-position perturbation profile (§6.3) | `julia --project=falcon falcon/scripts/position_profile.jl 40 250 A1` |
-| precision→rate law (§6.7) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
+| precision→rate law (§6.8) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
 | countermeasure, distribution (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl chisq` |
 | countermeasure, rate (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl rate A1 100 1500 1 out.txt` |
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
-| **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
+| key recovery with part 1 deployed (§7.1 iv) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
+| odd-norm key generation (§7.1 v) | `julia --project=falcon falcon/scripts/odd_norm_keygen.jl 40` |
 | **the replacement countermeasure** (§7.2) | `julia --project=falcon falcon/scripts/snapping.jl` |
 | centres as a linear form in f (§6.4) | `julia --project=falcon falcon/scripts/linear_form.jl` |
+| **key recovery from events alone** (§6.5) | `julia --project=falcon falcon/scripts/event_solve.jl` |
+| **the oracle window, all four ends** (§6.6) | `julia --project=falcon falcon/scripts/window.jl all 200 1200` |
+| the one-bit oracle's noise (§6.6) | `julia --project=falcon falcon/scripts/window.jl noise 10 150000` |
 | rounding mode invalidates signatures (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
 | the attack-family ceiling (§7.3) | `julia --project=falcon falcon/scripts/rounding_attack.jl 20 2400 1022` |
-| Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
+| Heuristic 1 (§6.2) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |

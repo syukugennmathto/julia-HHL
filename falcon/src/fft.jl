@@ -217,6 +217,14 @@ function merge_fft(f0_fft::AbstractVector{ComplexF64}, f1_fft::AbstractVector{Co
     n = 2m
     w = fft_roots(n)
     out = Vector{ComplexF64}(undef, n)
+    if FMA_FFT[]
+        @inbounds for i in 1:m
+            t = _cmul_fma(w[2i - 1], f1_fft[i])
+            out[2i - 1] = f0_fft[i] + t
+            out[2i]     = f0_fft[i] - t
+        end
+        return out
+    end
     @inbounds for i in 1:m
         t = w[2i - 1] * f1_fft[i]
         out[2i - 1] = f0_fft[i] + t
@@ -250,6 +258,15 @@ function split_fft(f_fft::AbstractVector{ComplexF64})
     w = fft_roots(n)
     f0 = Vector{ComplexF64}(undef, m)
     f1 = Vector{ComplexF64}(undef, m)
+    if FMA_FFT[]
+        @inbounds for i in 1:m
+            a = f_fft[2i - 1]
+            b = f_fft[2i]
+            f0[i] = 0.5 * (a + b)
+            f1[i] = _cmul_fma(0.5 * (a - b), conj(w[2i - 1]))
+        end
+        return (f0, f1)
+    end
     @inbounds for i in 1:m
         a = f_fft[2i - 1]
         b = f_fft[2i]
@@ -336,7 +353,9 @@ neg_fft(f::AbstractVector{ComplexF64}) = ComplexF64[-c for c in f]
 
 "Coordinatewise product.  [Py-ref] fft.py:130-133"
 mul_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64}) =
-    (_checklen(f, g); ComplexF64[f[i] * g[i] for i in eachindex(f)])
+    (_checklen(f, g); FMA_FFT[] ?
+        ComplexF64[_cmul_fma(f[i], g[i]) for i in eachindex(f)] :
+        ComplexF64[f[i] * g[i] for i in eachindex(f)])
 
 """
     div_fft(f_fft, g_fft)
@@ -416,7 +435,64 @@ will overflow where `a / b` would not.
     br *= m
     bi *= -m
     ar = real(a); ai = imag(a)
+    FMA_FFT[] && return ComplexF64(fma(ar, br, -(ai * bi)),
+                                   fma(ar, bi, ai * br))
     return ComplexF64(ar * br - ai * bi, ar * bi + ai * br)
+end
+
+"""
+    FMA_FFT
+
+Whether the FFT contracts `a*b + c` into a single fused multiply-add.
+
+This is **not** one of the three spelling classes of section 5: nobody writes
+`fma` in the source. C99 6.5p8 permits the *compiler* to contract an expression
+"as if" the intermediate had infinite range and precision, and `FP_CONTRACT`
+governs it. GCC defaults to `-ffp-contract=fast` and contracts across
+statements; clang and MSVC default to off for standard C. Both are conforming,
+and the FALCON reference sets neither. So the same source, on the same machine,
+built by two mainstream compilers at their defaults, computes different sampler
+centres — one rounding per complex product instead of two.
+
+ePrint 2024/1709 section 6.2 raises FMA as a plausible source of divergence
+between two implementations. We turn it into an *arm*, because section 6.6 needs
+a perturbation whose size can be compared against a window, not a hypothetical.
+
+CONSTANT TIME: irrelevant here (no secret-dependent branch); the toggle is
+hoisted out of every loop so the default path is untouched.
+"""
+const FMA_FFT = Ref(false)
+
+"""
+Complex product with the two dot products contracted, as `-ffp-contract=fast`
+does: one rounding per `a*b + c` instead of two.
+
+`fma`, not `muladd`. `muladd` in Julia — like `a*b + c` in C — is only
+*permitted* to fuse, and on this machine it does so in `merge_fft`'s loop and
+declines to in `mul_fft`'s comprehension, and declines again in both when the
+package is compiled with `--check-bounds=yes`. That is a faithful picture of the
+hazard and a useless experimental arm: the perturbation would depend on the
+build. `fma` is specified to round once, so the arm is reproducible, and it is
+the *upper* end of what a contracting compiler does rather than a sample of it.
+"""
+@inline function _cmul_fma(a::ComplexF64, b::ComplexF64)
+    ar, ai = reim(a); br, bi = reim(b)
+    return ComplexF64(fma(ar, br, -(ai * bi)), fma(ar, bi, ai * br))
+end
+
+"""
+    with_fma(f)
+
+Run `f()` with the FFT's complex products contracted (see [`FMA_FFT`](@ref)).
+"""
+function with_fma(f)
+    old = FMA_FFT[]
+    FMA_FFT[] = true
+    try
+        return f()
+    finally
+        FMA_FFT[] = old
+    end
 end
 
 """

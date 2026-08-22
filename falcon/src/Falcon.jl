@@ -86,6 +86,7 @@ export gram_fft, ldl_fft, ffldl_fft, normalize_tree!, falcon_tree
 export ffnp_fft, ffsampling_fft, leaf_sigmas, node_l10s, nleaves, treedepth
 export with_spec_ffsampling, with_spec_spelling
 export FFSAMPLING_CREF, CDIV_CREF, LDL_CREF
+export with_fma, FMA_FFT
 
 # --- module 9 --------------------------------------------------------------
 export encode_pubkey, decode_pubkey, encode_privkey, decode_privkey, recover_G
