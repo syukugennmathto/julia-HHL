@@ -4,9 +4,8 @@
 repository; every number in it is produced by a script named in the text, and
 the scripts are runnable without a C compiler except where noted.*
 
-*Status: the performance tables at n = 512 and the divergence results are
-final; entries marked **(pending)** are being measured by the background runs
-described in §7 and §9 and will be filled from their output.*
+*Status: all measurements reported here are final. Limitations that remain
+open are stated as such in §12.*
 
 ---
 
@@ -35,7 +34,12 @@ countermeasure. We reproduce that paper's mechanism independently, check its
 Heuristic 1 directly (which it does not), confirm the effect at n = 1024, and
 **explain the asymmetry it left open** — why the last two sampler calls diverge
 far more readily than the first two — as a perturbation that accumulates along
-the tree descent, 32× larger at the last two calls than the first two. Performance: this
+the tree descent, 32× larger at the last two calls than the first two. We also
+implement and evaluate that paper's own proposed countermeasure, and find that
+the half of it an implementer can actually deploy today — rounding instead of
+flooring, since the reference key generator cannot produce the odd
+`‖(g,−f)‖²` the other half requires — immunises only the *harmless* sampler
+positions and leaves every full-key-recovery position exposed. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -152,6 +156,12 @@ for this particular question.
    Antrag and HAWK, the sensitivity requires both floating point in the signing
    sampler and a small-denominator rational centre — Falcon alone has both, so
    the hazard is specific to its design, not generic to lattice hash-and-sign.
+7. **An evaluation of the proposed countermeasure** (§7.1): we implement
+   ePrint 2024/1709's Algorithm 4, confirm it is distributionally sound, verify
+   the rational structure of the centres directly, and show that because
+   `q = 12289` is odd while the reference's `‖(g,−f)‖²` is always even, the
+   deployable half of the countermeasure removes only the exposure that does not
+   lead to key recovery.
 
 We are equally explicit about what is **not** a contribution. The arithmetic
 mechanism (an integer centre passing through `floor`), the fact that the
@@ -617,6 +627,78 @@ separating the three spellings, is what produced the correct and narrower claim.
 
 ---
 
+### 7.1 The proposed countermeasure, implemented and evaluated
+
+Section 7.1 of ePrint 2024/1709 proposes the structural fix: replace `SamplerZ`
+by `NewSamplerZ` (Algorithm 4), which splits the centre with **round** instead
+of **floor**, moving the instability from the integers to the half-integers; and
+restrict `‖(g,−f)‖²` to be **odd** in key generation, which makes half-integer
+centres impossible. The paper notes, in one sentence, that the C reference only
+generates keys with `‖(g,−f)‖²` even, calling this "an idiosyncrasy of the C
+implementation itself, that is easily fixable." We implemented the countermeasure
+and evaluated it (`scripts/countermeasure_eval.jl`,
+`scripts/denominator_check.jl`). Three findings.
+
+**(i) The countermeasure is distributionally sound.** We implemented Algorithm 4
+faithfully — `r ← c − round(c)`, `y ← (2b−1)y₊` (not `b + (2b−1)y₊`),
+`x ← (y−r)²/2σ² − (y₊²−y₊)/2σ_max²` — building `NewBaseSampler`'s reverse CDT at
+256 bits from the weights `w(0) = ½`, `w(i) = exp(−(i²−i)/2σ_max²)`. A χ² test
+over 200000 samples at each of five `(μ,σ)` pairs gives `χ²/df` of 0.72, 0.96,
+0.56, 0.62 and 1.02 — the rounding sampler produces the correct discrete
+Gaussian. This is an independent confirmation of that paper's Algorithm 4.
+
+**(ii) The rational structure of the centres, verified directly.** Theorem 1 and
+Heuristic 1 assert the exact centre is `n_k/g_k` with `g₀ = q` at the first two
+calls and `g_{n−1} = ‖(g,−f)‖²` at the last two, but check this only indirectly.
+Measuring `|g·c − round(g·c)|` over 100000 samples at each end gives a maximum
+residual of 1.4×10⁻⁹ and 2.4×10⁻⁸ against values of magnitude ~5×10⁶ — a relative
+2×10⁻¹⁵, i.e. exactly integral up to floating-point error. The structure holds.
+
+**(iii) Deployed on the reference key generator, part 1 immunises only the
+harmless positions.** This is the consequence the paper does not draw. A centre
+`n/g` is an integer iff `g | n`, which is possible for any `g`; but it is a
+half-integer iff `2n = g(2j+1)`, which is possible **only when `g` is even** (for
+odd `g`, `g | 2n` and `gcd(g,2)=1` force `g | n`, an integer). Now:
+
+- at the **first two** calls `g₀ = q = 12289`, which is **odd**, so half-integer
+  centres cannot occur at all — rounding immunises these positions completely;
+- at the **last two** calls `g_{n−1} = ‖(g,−f)‖²`, which the reference key
+  generator always makes **even**, so half-integer centres occur at the same
+  density `1/g` that integer centres did — rounding immunises them not at all.
+
+Measured, over 100000 samples at each end:
+
+| position | `g` | integer centres | half-integer centres |
+|:---------|:----|----------------:|---------------------:|
+| calls 1, 2 | `q = 12289` (odd) | 5 | **0** |
+| calls 2n−1, 2n | `‖(g,−f)‖²` (even) | 7 | **11** |
+
+(Predicted densities `1/q = 8.1×10⁻⁵` and `1/t = 6.1×10⁻⁵` give expectations
+8.1, 6.1 and 6.1; the observed 11 is high at `p ≈ 0.04` but of the predicted
+order.) And the first two calls are precisely the *harmless* ones — §5 of that
+paper obtains from them only "a short lattice vector… not expected to be short
+enough to make key recovery feasible" — while the last two are the full
+key-recovery positions. So under `floor`, 7 of 12 exposures sit at the dangerous
+end; under `round` without the key-generation change, **all 11 do**. The
+countermeasure does not reduce key-recovery exposure; it concentrates what
+remains onto the positions that matter.
+
+The end-to-end rate agrees. Running the A1 arm with `NewSamplerZ` on reference
+keys gives 2 divergences in 150000 signatures (1.3×10⁻⁵) against the `floor`
+baseline's 10 in 525000 (1.9×10⁻⁵) — statistically indistinguishable.
+
+**We could not break the full countermeasure.** With `t = ‖(g,−f)‖²` odd,
+`m₂ = t² − 2u²` and `m₃ = t³ − 2t(u²+v²+w²) + 2u(v−w)²` are odd as well
+(odd − even = odd), so all six in-precision denominators are odd and half-integer
+centres cannot occur anywhere; that argument is sound. The gap is one of
+deployment, not of mathematics: part 2 is unavailable on the reference key
+generator (0 odd keys in 3200 generated), so what an implementer can actually
+deploy today is part 1 alone, and part 1 alone leaves the key-recovery exposure
+untouched. Any FIPS 206 text that adopts the rounding sampler **must** adopt the
+key-generation parity change in the same breath, and must say so explicitly.
+
+---
+
 ## 8. The constants
 
 ### 8.1 `fpr_inv_sigma` is not a reciprocal of the published σ
@@ -920,6 +1002,9 @@ runs unless a measurement asks otherwise.
 | key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
 | per-position perturbation profile (§6.3) | `julia --project=falcon falcon/scripts/position_profile.jl 40 250 A1` |
 | precision→rate law (§6.6) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
+| countermeasure, distribution (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl chisq` |
+| countermeasure, rate (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl rate A1 100 1500 1 out.txt` |
+| centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
