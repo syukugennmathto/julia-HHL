@@ -207,7 +207,7 @@
 <header class="mast">
   <span class="eyebrow">FALCON / FN-DSA · implementation study</span>
   <h1>Two Faithful Falcons</h1>
-  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. We measured how often, showed the proposed fix only half-works, and sketched a simpler one.</p>
+  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. So can one implementation, compiled two ways — and two thirds of those disagreements hand over the private key.</p>
   <div class="meta">
     <span><b>Independent implementation</b> · Julia, from the spec</span>
     <span><b>Reference</b> · round-3 v1.2 C &amp; Python</span>
@@ -232,9 +232,9 @@
     <div class="d">Part 1 of ePrint 2024/1709 §7.1 immunises only the harmless positions; with it deployed we still recover keys, 3 of 3.</div>
   </div>
   <div class="stat">
-    <div class="k">Verification speed</div>
-    <div class="v good">fastest</div>
-    <div class="d">Beats every C build we measured; 235–245× the Python reference.</div>
+    <div class="k">The reference against itself</div>
+    <div class="v sig">8 of 12</div>
+    <div class="d">Built with <span class="mono">-ffp-contract=fast</span>, the C reference disagrees with itself on 12 of 100&thinsp;000 signatures — and 8 of those pairs give up the private key.</div>
   </div>
 </div>
 
@@ -242,6 +242,7 @@
   <span class="eyebrow">Abstract</span>
   <p>FALCON — standardized by NIST as FN-DSA — is the only selected signature whose output is a function of floating-point arithmetic, and its specification's precision analysis is about the sampled <em>distribution</em>, not about whether two conforming implementations produce the same bytes. We wrote an independent implementation in Julia, from the specification, and reconciled it with the C reference until it reproduces the reference's signatures <strong>byte for byte</strong>. That reconciliation exposes three classes of place where the specification does not determine the intermediate values: how an operation is spelled, a constant that cannot be derived from the published parameters, and a smoothing parameter that is used but not printed.</p>
   <p>Two spellings — complex division and the <span class="mono">D11</span> entry of LDL* — change the signature at ≈ 7.5×10⁻⁶ per signature, always at the last two sampler calls: the positions where ePrint 2024/1709 (Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025) turns a single discrepant pair into full key recovery. Unlike the perturbations that paper studies, these are differences between the <em>specification</em> and the <em>reference</em>, present in both of the reference's signing modes, and not removed by its countermeasure. We reproduce that paper's mechanism independently and check its Heuristic 1 directly, which it does not.</p>
+  <p>Two further results concern the sampler calls that paper sets aside. The centre of the first two calls is exactly <span class="mono">(c·f)[n/2−1] / q</span> — a <em>public linear form in the secret</em> — so an integer centre there is one equation on the key over <span class="mono">F_q</span>; from <span class="mono">n−1</span> such <em>events</em>, with no signature difference vectors and no lattice reduction, Gaussian elimination returns the private key, which we run. And the oracle such a channel needs exists inside a two-sided window on the perturbation size whose ends we measure. Our own respellings fall below that window. One optimization flag falls inside it: compiled with <span class="mono">clang -ffp-contract=fast</span>, the C reference disagrees with itself on <strong>12 of 100&thinsp;000</strong> signatures, and <strong>8 of those 12 pairs yield the private key</strong>. Eight ordinary build configurations — two compilers, native against emulated floating point, the reference's own AVX2 path — are byte-identical, so the hazard is one flag, not build variation in general.</p>
 </div>
 
 <span class="secnum">01 — The question</span>
@@ -375,10 +376,106 @@ first two (0,1)     : 2.7e-15
 last two (1022,1023): 8.6e-14        <span style="color:var(--signal);font-weight:600;">ratio ≈ 32×</span></pre>
 <p>The step is structural: <span class="mono">ffSampling</span> samples <span class="mono">z1</span> first, then forms <span class="mono">t0 ← t0 + (t1 − z1)·l10</span> and samples <span class="mono">z0</span>. Every centre in <span class="mono">z0</span> — the second half, including the last two calls — passes through the top-level <span class="mono">l10</span> correction that carries the rounding difference; the first-half centres do not. A centre crosses an integer only when <span class="mono">|Δμ|</span> exceeds its distance to one, so 32× larger <span class="mono">|Δμ|</span> means ~32× more divergence at the last two — the asymmetry, explained. And for A2 (tree-only) the first-two <span class="mono">|Δμ|</span> is <strong>exactly zero</strong> (the first leaf's centre is a pure target split, reached before any <span class="mono">l10</span>), so A2 divergences are confined to the last two <em>structurally</em>. The sensitive set is not fixed — it depends on where the perturbation enters.</p>
 
-<span class="secnum">04 — Positioning</span>
+<span class="secnum">04 — The other channel</span>
+<h2>The calls everyone set aside</h2>
+
+<p>ePrint 2024/1709 §5 dismisses a divergence at the <em>first</em> two sampler calls in one paragraph: the resulting difference vector "is a short lattice vector, but it is not expected to be short enough to make key recovery feasible." That is a claim about the difference vector. There is a channel at those positions that never reads it.</p>
+
+<p>In <span class="mono">sample_preimage</span> the second target component is <span class="mono">t1 = (−ĉ·b)/q</span> with <span class="mono">b = −f</span>, so as a ring element <span class="mono">t1 = (c·f)/q</span> <em>exactly</em>, where <span class="mono">c</span> is the public hashed message. Checked against exact <span class="mono">Int128</span> negacyclic arithmetic, the first two sampler centres are coefficients of that quotient, at fixed indices, to floating-point error alone. So an integer centre at call 1 is precisely</p>
+
+<pre>(c·f)[n/2−1] ≡ 0  (mod q)</pre>
+
+<p>— one <span class="mono">F_q</span>-linear equation on the secret, with coefficients the adversary computes from the public message. The leak is carried by the <em>occurrence</em> of the event, not by the value of anything. We ran the solve:</p>
+
+<pre><span class="cm"># scripts/event_solve.jl</span>
+collected 511 events from 5823368 syndromes (rate 8.77e-05, predicted 1/q = 8.14e-05)
+system rank 511 of 512 unknowns
+recovered vector: max |.| = 16   (true f has max |.| = 16)
+<span style="color:var(--good);font-weight:600;">matches the secret f: true  (up to sign)</span></pre>
+
+<p><span class="mono">n−1</span> events give a rank-<span class="mono">511</span> system whose kernel is one-dimensional; scanning the <span class="mono">q−1</span> scalar multiples and keeping the shortest returns <span class="mono">f</span> itself. One 512×512 Gaussian elimination, 49 seconds — no lattice reduction, no difference vectors. Two assumptions did not survive it: that shortness of <span class="mono">Δs</span> was the relevant question, and that lifting <span class="mono">f mod q</span> to <span class="mono">f</span> needs a lattice.</p>
+
+<h3>The oracle it needs is a window, and both ends are measurable</h3>
+
+<p>Such a channel needs something that tells the adversary which messages produced an event. A difference between two implementations does that exactly when its perturbation on the centre is neither too small nor too large.</p>
+
+<p><strong>Too small</strong> is the interesting bound, and it is not about anyone's precision. At an event the true centre is an exact integer <span class="mono">m</span>, but <em>both</em> implementations compute <span class="mono">m + η</span> with the same accumulated error — the FFT, the tree and the descent are common to them. <span class="mono">floor</span> disagrees only if the difference flips the sign of <span class="mono">η</span>. Over 200 manufactured events, <span class="mono">|η|</span> has median 2.8×10⁻¹⁴, and the straddle probability under an injected perturbation <span class="mono">δ</span> turns over exactly there:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>δ</th><th class="num">0</th><th class="num">10⁻¹⁶</th><th class="num">10⁻¹⁵</th><th class="num">10⁻¹⁴</th><th class="num">10⁻¹³</th><th class="num">10⁻¹²</th><th class="num">10⁻¹¹</th><th class="num">10⁻⁸</th></tr></thead>
+<tbody><tr><td>P(straddle | integer centre)</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.030</td><td class="num">0.290</td><td class="num">0.425</td><td class="num">0.435</td><td class="num">0.440</td></tr></tbody>
+</table>
+</div>
+
+<p><strong>Too large</strong> is the interior false-positive rate: the same perturbation straddles the ≈ 2n generic centres at rate <span class="mono">κδ</span> with <span class="mono">κ = 1.62×10³</span>, and the solve tolerates a false fraction of about <span class="mono">1/n</span>. The two bounds give a window <strong>2.8×10⁻¹⁴ … 4.9×10⁻¹¹</strong> — 3.2 decades wide.</p>
+
+<div class="note">
+<span class="eyebrow">Where our own findings sit</span>
+<p>Below it. The respellings of §02 perturb the first two centres by 2.7×10⁻¹⁵ (arm A1) and by <em>exactly zero</em> (arm A2). An earlier experiment that manufactured ten integer centres and saw zero straddles was not unlucky; it was an order of magnitude under a threshold we can now name.</p>
+</div>
+
+<span class="secnum">05 — The reference against itself</span>
+<h2>One optimization flag, and the key</h2>
+
+<p>C99 6.5p8 lets a compiler contract <span class="mono">a*b + c</span> into a single fused multiply-add with one rounding instead of two, under <span class="mono">FP_CONTRACT</span>. The FALCON reference sets neither the pragma nor a flag, and the specification does not mention contraction. So we stopped modelling and built the reference itself — three ways, same source, same key, same messages, same PRNG tape.</p>
+
+<pre>cl_fast: 143 fma instructions   [clang -O2 -march=native -ffp-contract=fast]
+cl_def:    0                    [clang -O2 -march=native]
+gc_def:    0                    [gcc   -O2 -march=native]
+
+gcc default == clang default : identical over 100000 signatures
+<span style="color:var(--signal);font-weight:600;">clang -ffp-contract=fast vs clang default : 12 of 100000 differ  (1.2e-4)</span></pre>
+
+<p>All three generate the identical private key from the identical seed — key generation runs the FFT too, so that had to be checked rather than assumed. Handing every divergent pair to the recovery of 2024/1709 §5.1, which sees only the two signatures, the public key and the message:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>Message</th><th class="num">Coefficients differing</th><th>Outcome</th></tr></thead>
+<tbody>
+<tr><td class="mono">8861</td><td class="num">916 / 1024</td><td><span class="win">key recovered</span> · <span class="mono">x²⁵⁶(f,g)</span></td></tr>
+<tr><td class="mono">23215</td><td class="num">966 / 1024</td><td><span class="win">key recovered</span> · <span class="mono">−x⁰(f,g)</span></td></tr>
+<tr><td class="mono">23823</td><td class="num">916 / 1024</td><td><span class="win">key recovered</span> · <span class="mono">−x²⁵⁶(f,g)</span></td></tr>
+<tr><td class="mono">69227, 69647, 78710, 85161, 87268</td><td class="num">916 / 1024</td><td><span class="win">key recovered</span> · five more</td></tr>
+<tr><td class="mono">7655, 15028, 38958, 66120</td><td class="num">1020–1023 / 1024</td><td>no <span class="mono">(a,b)</span> — a <em>first-two</em> divergence (§04)</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>Eight of twelve.</strong> Each recovered pair is an exact NTRU symmetry <span class="mono">±x^k(f,g)</span> of the stored key with <span class="mono">‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822</span> — a working private key, not an approximation of one. The other four are the channel of §04: their <span class="mono">Δz</span> is not 2-sparse, which the failed exact division proves, and no interior integer centre was found in 1.02×10⁸ draws. The two coefficient counts separate cleanly, so an adversary can tell the channels apart. The 4/12 split is close to the 30/70 of that paper's Table 2, from a completely different perturbation source. It replicates at FALCON-1024: 6 of 60&thinsp;000.</p>
+
+<h3>The negative control is most of the value</h3>
+
+<p>A result that says "builds of the reference differ" would be alarming and useless if ordinary build choices differed too — one could not say which difference mattered. They do not. Over 30&thinsp;000 signatures each:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>Build configuration</th><th>Signature stream</th></tr></thead>
+<tbody>
+<tr><td><span class="mono">gcc -O2</span> · native double</td><td rowspan="8" style="vertical-align:middle;"><span class="win">all eight byte-identical</span></td></tr>
+<tr><td><span class="mono">gcc -O2 -march=native</span></td></tr>
+<tr><td><span class="mono">gcc</span> · the reference's AVX2 FFT path</td></tr>
+<tr><td><span class="mono">gcc -O2</span> · emulated floating point</td></tr>
+<tr><td><span class="mono">gcc -march=native</span> · emulated</td></tr>
+<tr><td><span class="mono">clang -O2</span> · native double</td></tr>
+<tr><td><span class="mono">clang</span> · AVX2 path</td></tr>
+<tr><td><span class="mono">clang -O2</span> · emulated floating point</td></tr>
+<tr><td><span class="mono">clang -O2 -march=native -ffp-contract=fast</span></td><td><span class="lose">differs from all eight</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Two compilers, native against emulated floating point, baseline against <span class="mono">-march=native</span>, and the reference's separate AVX2 implementation of the FFT — all agree bit for bit. That the emulated build matches the native one is worth its own line: the reference's <span class="mono">config.h</span> recommends emulation <em>because</em> native FPUs "may yield slight discrepancies that could affect determinism", and here they do not. The whole divergence is one flag — which <span class="mono">-Ofast</span> and <span class="mono">-ffast-math</span> both imply.</p>
+
+<div class="note">
+<span class="eyebrow">What is standing between FN-DSA and this today</span>
+<p>An accident. The native build wraps <span class="mono">double</span> in <span class="mono">typedef struct { double v; } fpr;</span>, and <span class="mono">fpr.h</span> gives the reason: so the compiler complains if raw arithmetic operators are used on the type. It has a second effect nobody recorded — GCC will not contract through the wrapper at any setting we could find, and clang will only at <span class="mono">-ffp-contract=fast</span>. A type-safety idiom is currently doing cryptographic work, in a header, under a comment about something else. We had claimed, one revision earlier, that GCC and clang <em>defaults</em> diverge; building it showed that was wrong, and the corrected claim — one flag, not two compilers — is both narrower and sharper.</p>
+</div>
+
+<span class="secnum">06 — Positioning</span>
 <h2>What is new, and what is not</h2>
 
-<p>The honest positioning is most of the contribution. The arithmetic mechanism, the fact that the reference's two signing modes diverge, and the sampler's insensitivity to its width are all results of ePrint 2024/1709. We reproduce them independently and add two things.</p>
+<p>The honest positioning is most of the contribution. The arithmetic mechanism, the fact that the reference's two signing modes diverge, and the sampler's insensitivity to its width are all results of ePrint 2024/1709. We reproduce them independently, and add to them.</p>
 
 <div class="tbl-wrap">
 <table>
@@ -390,6 +487,9 @@ last two (1022,1023): 8.6e-14        <span style="color:var(--signal);font-weigh
 <tr class="hl"><td>Cplx div, D11 (I a,b)</td><td><strong>not present</strong></td><td><strong>7.5×10⁻⁶ at key-recovery position; not fixed by §7.2</strong></td></tr>
 <tr><td>Heuristic 1</td><td>consequence measured</td><td>cause measured directly</td></tr>
 <tr><td>Even ‖(g,−f)‖²</td><td>noted as a C idiosyncrasy</td><td>reproduced independently</td></tr>
+<tr class="hl"><td>First two sampler calls</td><td>set aside — "not short enough to make key recovery feasible"</td><td><strong>key recovered from events alone, over <span class="mono">F_q</span></strong> (§04)</td></tr>
+<tr class="hl"><td>FMA as a divergence source</td><td>raised as plausible (§6.2)</td><td><strong>the reference, two conforming builds: 12 of 100k, 8 keys</strong> (§05)</td></tr>
+<tr><td>The oracle's requirement</td><td>—</td><td>a two-sided window, both ends measured</td></tr>
 </tbody>
 </table>
 </div>
@@ -431,7 +531,7 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 <p>Footnote 6 holds by construction (Mitaka's <span class="mono">normaldist</span> makes the centre continuous; HAWK's signing is all-integer, its only FP FFT being in the <em>verifier</em>). The exercise gives a two-condition rule: the sensitivity needs <strong>both</strong> (a) floating point in the signing sampler <strong>and</strong> (b) a small-denominator rational centre. Falcon alone has both — so the hazard is specific to its design, and the fix belongs in FN-DSA, not a generic lattice-signature guideline.</p>
 
 
-<span class="secnum">05 — Break &amp; fix</span>
+<span class="secnum">07 — Break &amp; fix</span>
 <h2>Half a countermeasure protects nothing — and a simpler alternative</h2>
 
 <p>ePrint 2024/1709 §7.1 proposes the structural fix in two parts: (1) replace <span class="mono">SamplerZ</span> with a <em>rounding</em> sampler (Algorithm 4), moving the instability from integers to half-integers; and (2) force <span class="mono">‖(g,−f)‖²</span> <strong>odd</strong>, which makes half-integer centres impossible. We implemented it. The χ² test over 200k samples at five (μ,σ) pairs gives χ²/df of 0.72–1.02, so Algorithm 4 is distributionally sound — an independent confirmation.</p>
@@ -487,7 +587,7 @@ sanity: snapping changed 0 of 1200 ordinary signatures</pre>
 </div>
 <p>Four honest caveats: the 10⁻⁹ margin is <em>measured, not proved</em>; snapping applies only where <span class="mono">g</span> is known and below 2⁵³; the "0 of 1200" check has almost no power (≈0.3 changes were expected), so no distributional test has really been done; and our implementation allocates, is not constant-time, and admits <span class="mono">r</span> outside [0,1). We present snapping as a promising direction, not a finished countermeasure.</p>
 
-<span class="secnum">06 — Performance</span>
+<span class="secnum">08 — Performance</span>
 <h2>How fast, against what</h2>
 
 <p>One machine (4 cores, x86-64 with FMA — the single-machine limit is real and unhidden). We vary what we can: two compilers, three optimization levels, emulated vs native floating point for C; three optimization levels for Julia; and report medians over the run-to-run distribution.</p>
@@ -516,7 +616,7 @@ sanity: snapping changed 0 of 1200 ordinary signatures</pre>
 
 <p>At n=1024 the pattern sharpens: verification is again the fastest measured (0.031&nbsp;ms vs best C 0.035, 245× Python), signing is ≈1.7× faster than emulated C and 18.8× faster than Python, and key generation is 296× faster than Python but now ≈1.3× slower than even emulated C — the <code class="inl">BigInt</code>-vs-RNS gap widens with degree. Notably, <strong>Julia −O2 wins at 512 and −O3 wins at 1024</strong>: the best level is per-operation, and reporting one level would misrepresent the implementation. Key generation is also the endpoint of a long optimization — 9610&nbsp;ms in the first working version — reached almost entirely by removing allocation, not by high-level array rewriting.</p>
 
-<span class="secnum">07 — Scope &amp; limits</span>
+<span class="secnum">09 — Scope &amp; limits</span>
 <h2>Constant time, and what we can't yet say</h2>
 
 <p>This implementation is <strong>not</strong> constant-time and does not try to be. Where the code does something a constant-time implementation could not, a <code class="inl">CONSTANT TIME:</code> comment marks it. A Julia implementation cannot close the implementation-level channels (GC, JIT, bounds checks, dispatch) at all — which is precisely why it is a clean instrument for the specification-level question here, and a poor vehicle for a deployable signer. We state this rather than claim a side-channel contribution we did not make.</p>
@@ -525,15 +625,21 @@ sanity: snapping changed 0 of 1200 ordinary signatures</pre>
 <ul>
 <li><strong>A2a / A2b are not separated</strong> — complex division alone and <span class="mono">D11</span> alone each gave 0/100k; separating a ≈3.75×10⁻⁶ single-arm rate from zero would take millions of signatures. We can say the two together reach the signature, not which one.</li>
 <li><strong>A2 and A1 rates are not distinguished</strong> — factor 2.5 apart but p ≈ 0.23 over 925k pooled signatures; reported as comparable, not ordered.</li>
-<li><strong>The §6.1 asymmetry</strong> ePrint 2024/1709 leaves unexplained, we also do not resolve.</li>
-<li><strong>FALCON-1024</strong> is measured at lower volume (350k, one event); the rate there is loose, but the one event carries the full mechanism, so replication is established.</li>
+<li><strong>The asymmetry</strong> ePrint 2024/1709 leaves unexplained we give a mechanism for, not a calibrated model: three estimates of the ratio span a factor of ten and we have not reconciled them.</li>
+<li><strong>The event channel's two halves are measured, their composition is arithmetic.</strong> §04 runs the solve and §05 exhibits an oracle, but not together: at 3.3×10⁻⁵ informative events per query, 511 rows is ≈1.5×10⁷ signature pairs, on the order of a day, which we did not spend. §04 also draws syndromes uniformly rather than hashing messages.</li>
+<li><strong>The contraction result is one compiler pair on one machine.</strong> We did not test aarch64 — where FMA is in the base ISA — nor MSVC, nor other compiler versions. That the <span class="mono">fpr</span> wrapper blocks contraction may be robust or an artefact of these two versions; only a wider survey would say.</li>
+<li><strong>Verification speed</strong> beats the fastest C build by ≈10%, which is inside the spread that build options alone produce. The defensible claim is "competitive with C", not a ranking.</li>
+<li><strong>FALCON-1024</strong> is measured at lower volume for the respellings (350k, one event); the contraction result does replicate there (6 of 60k).</li>
 </ul>
 
-<span class="secnum">08 — Recommendations</span>
+<span class="secnum">10 — Recommendations</span>
 <h2>What FIPS 206 should do</h2>
 <p>If FIPS&nbsp;206 requires bit-exact KAT agreement:</p>
 <ol>
-<li><strong>Pin the spellings</strong> of complex division, <span class="mono">D11</span>, and the bottom-level <span class="mono">ffSampling</span> block — or, better, adopt ePrint 2024/1709 §7.1's structural fix (sample the centre with <span class="mono">round</span> not <span class="mono">floor</span>, and require ‖(g,−f)‖² odd), which removes the sensitivity itself. That also requires relaxing the reference's key-generation parity condition, which currently forces ‖(g,−f)‖² even.</li>
+<li><strong>Say that <span class="mono">FP_CONTRACT</span> must be off, normatively.</strong> This is the one we would put first. §05 is what it costs otherwise: 12 divergent signatures in 100&thinsp;000 and 8 private keys, from one flag that <span class="mono">-Ofast</span> and <span class="mono">-ffast-math</span> both imply. The reference is protected today by an undocumented side effect of a type-safety idiom, and an accident is not a specification.</li>
+<li><strong>Say that a fix at the last two positions alone is not a fix.</strong> §04 recovers the key from first-two events, so the reason 2024/1709 §5 gives for treating those calls as harmless does not hold, and any countermeasure justified in those terms needs a different justification.</li>
+<li><strong>Say whether the floating-point environment is in scope.</strong> A signer conforming in every respect except the ambient IEEE-754 rounding direction emits signatures that <em>fail verification</em> — 0 of 200 valid under FE_UPWARD and FE_DOWNWARD — while still satisfying the norm bound. That is a correctness requirement, and no current text states it.</li>
+<li><strong>Pin the spellings</strong> of complex division, <span class="mono">D11</span>, and the bottom-level <span class="mono">ffSampling</span> block — or, better, adopt ePrint 2024/1709 §7.1's structural fix (sample the centre with <span class="mono">round</span> not <span class="mono">floor</span>, and require ‖(g,−f)‖² odd), which removes the sensitivity itself. Mandate <em>both</em> parts in the same clause: with <span class="mono">round</span>, the first two calls are closed unconditionally because <span class="mono">q</span> is odd, while the last two — the cheapest key-recovery positions — are left exactly as exposed as before. Adopting it also requires relaxing the reference's key-generation parity condition, which currently forces ‖(g,−f)‖² even.</li>
 <li><strong>Publish <span class="mono">fpr_inv_sigma</span> at full precision</strong> rather than leaving it to be derived from a rounded σ, and say whether intermediate values are within KAT scope.</li>
 <li><strong>State σ_min's ε</strong>, or its derivation.</li>
 <li><strong>State the SamplerZ byte-assembly convention</strong> alongside the vectors.</li>
@@ -542,10 +648,12 @@ sanity: snapping changed 0 of 1200 ordinary signatures</pre>
 <footer>
 <p><strong>Reproducing everything.</strong> Every figure is produced by a named script and re-checkable without a C compiler except where noted.</p>
 <p class="mono">julia --project=falcon -e 'using Pkg; Pkg.test()'  &nbsp;·&nbsp; the "byte for byte" testset<br>
-julia … falcon/scripts/divergence_rate.jl 100 1000  &nbsp;·&nbsp; §3<br>
-julia … falcon/scripts/heuristic1_check.jl 100 1000  &nbsp;·&nbsp; §4<br>
-sh falcon/scripts/bench_all.sh  &nbsp;·&nbsp; §5</p>
-<p>Manuscript: <span class="mono">docs/paper.md</span> · measurements: <span class="mono">docs/debug_log.md</span> #046–#056 · draft NIST comment: <span class="mono">docs/nist_comment_draft.md</span>. Suite: 61521 passing.</p>
+julia … falcon/scripts/divergence_rate.jl 100 1000  &nbsp;·&nbsp; §03<br>
+julia … falcon/scripts/event_solve.jl  &nbsp;·&nbsp; §04, the key from events alone<br>
+julia … falcon/scripts/window.jl all 200 1200  &nbsp;·&nbsp; §04, both ends of the window<br>
+sh falcon/scripts/cref_contract.sh 100000  &nbsp;·&nbsp; §05, two builds of the C reference<br>
+sh falcon/scripts/bench_all.sh  &nbsp;·&nbsp; §08</p>
+<p>Manuscript: <span class="mono">docs/paper.md</span> · measurements: <span class="mono">docs/debug_log.md</span> #046–#071 · draft NIST comment: <span class="mono">docs/nist_comment_draft.md</span>. Suite: 61708 passing.</p>
 </footer>
 
 </div>

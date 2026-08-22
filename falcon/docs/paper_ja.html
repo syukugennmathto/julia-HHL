@@ -135,7 +135,7 @@
 <header class="mast">
   <span class="eyebrow">FALCON / FN-DSA · 実装研究</span>
   <h1>忠実な二羽のFALCON</h1>
-  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。頻度を測り、提案された対策が半分では効かないことを示し、より簡単な代替を示した。</p>
+  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。<strong>一つの実装を二通りにビルドしても返す</strong>― そしてその食い違いの三分の二は、秘密鍵をそのまま渡す。</p>
   <div class="meta">
     <span><b>独立実装</b> · Julia、仕様書から</span>
     <span><b>参照実装</b> · round-3 v1.2 の C と Python</span>
@@ -158,9 +158,9 @@
     <div class="d">§7.1 の part 1 は無害な位置しか免疫しない。入れた状態で鍵は取れる ― 3/3。</div>
   </div>
   <div class="stat">
-    <div class="k">検証の速さ</div>
-    <div class="v good">最速</div>
-    <div class="d">測ったどの C ビルドより速く、Python 参照実装の 235〜245 倍。</div>
+    <div class="k">参照実装 対 参照実装</div>
+    <div class="v sig">12件中8件</div>
+    <div class="d"><span class="mono">-ffp-contract=fast</span> で建てた C 参照実装は、自分自身と 10 万本中 12 本で食い違う。うち 8 組から秘密鍵が出る。</div>
   </div>
 </div>
 
@@ -168,6 +168,7 @@
   <span class="eyebrow">要旨</span>
   <p>FALCON ― NIST が FN-DSA として標準化する格子署名 ― は、選定された署名の中で唯一、出力が浮動小数点演算の関数になる。しかも仕様書の精度解析は、サンプラが出力する<em>分布</em>についてのものであって、二つの適合実装が同じバイト列を返すかどうかについてではない。我々は仕様書だけを読んで Julia で独立実装を書き、参照実装の署名を<strong>バイト単位で再現</strong>するまで突き合わせた。その突き合わせが、仕様書が中間値を決めていない箇所を 3 クラス炙り出す ― <em>演算の書き方</em>、<em>公開パラメータから導けない定数</em>、<em>使われているのに印字されていない ε</em>。</p>
   <p>そのうち二つの書き方 ― 複素除算と <span class="mono">LDL*</span> の <span class="mono">D11</span> ― は署名を 40 万本あたり 3 本、率にして 7.5×10⁻⁶ で変える。しかも必ず最後の 2 回のサンプラ呼び出し、すなわち ePrint 2024/1709（Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025）が 1 ペアから秘密鍵の全復元に使う位置で。同論文が扱う摂動と違い、これは<em>仕様書</em>と<em>参照実装</em>の差であり、参照実装の両 signing mode に共通に存在し、同論文の対策では塞がらない。我々は同論文の機構を別経路から追認し、同論文が測っていない Heuristic 1 を直接検証する。</p>
+  <p>さらに二つの結果は、同論文が「使えない」として脇に置いた<strong>最初の 2 回</strong>に関わる。第一に、最初の 2 回の中心は厳密に <span class="mono">(c·f)[n/2−1] / q</span>、すなわち<em>秘密についての公開線形形式</em>である。だからそこでの整数中心は <span class="mono">F_q</span> 上の方程式 1 本にほかならず、<span class="mono">n−1</span> 個の<em>事象</em>を集めれば、差ベクトルも格子簡約も使わずにガウス消去だけで秘密鍵が戻る ― 実際に走らせた。第二に、そのチャネルが必要とするオラクルは、摂動の大きさについての<strong>両側の窓</strong>の中にだけ存在する。窓の両端を実測した。本稿自身の「書き方の差」は窓の<em>下</em>にある。しかし最適化オプション一つが窓の<em>中</em>に落ちる ― <span class="mono">clang -ffp-contract=fast</span> で建てた C 参照実装は、既定で建てた同じ clang と <strong>10 万本中 12 本</strong>で食い違い、<strong>そのうち 8 組から秘密鍵が出る</strong>。普通のビルドの選択 8 通り（2 コンパイラ、native 対 emulated、参照実装自身の AVX2 経路）は全部バイト一致するので、危険なのはビルドのばらつき一般ではなく<strong>旗ひとつ</strong>である。</p>
 </div>
 
 <span class="secnum">01 — 問い</span>
@@ -290,9 +291,105 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 最後の2回 (1022,1023): 8.6e-14        <span style="color:var(--signal);font-weight:600;">比 ≈ 32×</span></pre>
 <p>段は構造的だ：<span class="mono">ffSampling</span> は <span class="mono">z1</span> を先に引き、<span class="mono">t0 ← t0 + (t1 − z1)·l10</span> を作ってから <span class="mono">z0</span> を引く。<span class="mono">z0</span>（後半＝最後の2回を含む）の中心は上位 <span class="mono">l10</span> 補正を経由し、丸め差がそこに乗る。前半の中心は経由しない。中心が整数をまたぐのは <span class="mono">|Δμ|</span> が整数までの距離を超えるときなので、32倍大きい <span class="mono">|Δμ|</span> は 32倍多い発散 ― これが非対称性の正体。そして A2（木のみ）では最初の2回の <span class="mono">|Δμ|</span> は<strong>厳密に 0</strong>（第1葉の中心は l10 補正前の純粋な目標 split）なので、A2 の発散は<em>構造的に</em>最後の2回に限られる。敏感位置は固定ではなく、摂動がどこから入るかで決まる。</p>
 
-<span class="secnum">04 — 位置づけ</span>
+<span class="secnum">04 — もう一つのチャネル</span>
+<h2>誰もが脇に置いた 2 回</h2>
+
+<p>ePrint 2024/1709 §5 は、<em>最初の</em> 2 回での発散を 1 段落で退ける ― 生じる差ベクトルは「短い格子ベクトルではあるが、鍵復元を可能にするほど短いとは期待できない」。これは<strong>差ベクトルについての</strong>主張である。あの位置には、差ベクトルを一切読まないチャネルがある。</p>
+
+<p><span class="mono">sample_preimage</span> の第 2 成分は <span class="mono">t1 = (−ĉ·b)/q</span>、<span class="mono">b = −f</span> なので、環の元として <span class="mono">t1 = (c·f)/q</span> が<em>厳密に</em>成り立つ（<span class="mono">c</span> は公開のハッシュ点）。<span class="mono">Int128</span> の厳密な negacyclic 演算と突き合わせると、最初の 2 回の中心はその商の係数に、固定インデックスで、浮動小数点誤差の範囲で一致する。つまり call 1 での整数中心とは、ちょうど</p>
+
+<pre>(c·f)[n/2−1] ≡ 0  (mod q)</pre>
+
+<p>― 秘密についての <span class="mono">F_q</span> 線形方程式 1 本であり、その係数は攻撃者が公開メッセージから計算できる。漏れているのは値ではなく<em>事象の発生</em>そのものである。解いてみた:</p>
+
+<pre><span class="cm"># scripts/event_solve.jl</span>
+collected 511 events from 5823368 syndromes (rate 8.77e-05, predicted 1/q = 8.14e-05)
+system rank 511 of 512 unknowns
+recovered vector: max |.| = 16   (true f has max |.| = 16)
+<span style="color:var(--good);font-weight:600;">matches the secret f: true  (up to sign)</span></pre>
+
+<p><span class="mono">n−1</span> 件の事象で階数 511 の系ができ、核は 1 次元。核ベクトルの <span class="mono">q−1</span> 通りのスカラー倍を走査して最短を取ると <span class="mono">f</span> そのものが出る。512×512 のガウス消去 1 回、49 秒 ― 格子簡約も差ベクトルもなし。ここで二つの前提が崩れた: <span class="mono">Δs</span> の短さが問題だという前提と、<span class="mono">f mod q</span> から <span class="mono">f</span> への持ち上げに格子が要るという前提である。</p>
+
+<h3>必要なオラクルは「窓」であり、両端とも測れる</h3>
+
+<p>このチャネルには「どのメッセージが事象だったか」を教える何かが要る。二実装の差がそれになるのは、中心への摂動が<strong>小さすぎず大きすぎない</strong>ときだけである。</p>
+
+<p><strong>小さすぎる</strong>側の境界が面白い。誰の精度の話でもないからだ。事象では真の中心は厳密な整数 <span class="mono">m</span> だが、<em>両方の</em>実装が同じ累積誤差で <span class="mono">m + η</span> を計算する ― FFT も木も降下も両者に共通だからである。<span class="mono">floor</span> が食い違うのは、差が <span class="mono">η</span> の符号をひっくり返したときだけ。200 件の事象で <span class="mono">|η|</span> の中央値は 2.8×10⁻¹⁴、そして注入した摂動 <span class="mono">δ</span> に対する跨ぎ確率は、ちょうどそこで立ち上がる:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>δ</th><th class="num">0</th><th class="num">10⁻¹⁶</th><th class="num">10⁻¹⁵</th><th class="num">10⁻¹⁴</th><th class="num">10⁻¹³</th><th class="num">10⁻¹²</th><th class="num">10⁻¹¹</th><th class="num">10⁻⁸</th></tr></thead>
+<tbody><tr><td>P(跨ぐ | 整数中心)</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.030</td><td class="num">0.290</td><td class="num">0.425</td><td class="num">0.435</td><td class="num">0.440</td></tr></tbody>
+</table>
+</div>
+
+<p><strong>大きすぎる</strong>側は内部の偽陽性率である。同じ摂動は約 2n 個の一般の中心を <span class="mono">κδ</span>（<span class="mono">κ = 1.62×10³</span>）の率で跨ぎ、解法が許す偽の割合は約 <span class="mono">1/n</span>。両者から窓は <strong>2.8×10⁻¹⁴ 〜 4.9×10⁻¹¹</strong>、幅 3.2 桁。</p>
+
+<div class="note">
+<span class="eyebrow">本稿自身の発見はどこにあるか</span>
+<p>窓の下である。§02 の書き方の差は最初の 2 回の中心を 2.7×10⁻¹⁵（腕 A1）と<em>厳密に 0</em>（腕 A2）しか動かさない。整数中心を 10 件作って 1 件も跨がなかった以前の実験は、運が悪かったのではない。いま名前のついた閾値の、一桁下にいた。</p>
+</div>
+
+<span class="secnum">05 — 参照実装 対 参照実装</span>
+<h2>最適化オプション一つと、秘密鍵</h2>
+
+<p>C99 6.5p8 は、コンパイラが <span class="mono">a*b + c</span> を丸め 1 回の融合積和に縮約することを許し、<span class="mono">FP_CONTRACT</span> がそれを制御する。FALCON 参照実装はプラグマも旗も設定せず、仕様書は縮約に言及しない。そこで模型をやめ、参照実装そのものを 3 通りに建てた ― 同じソース、同じ鍵、同じメッセージ、同じ PRNG テープ。</p>
+
+<pre>cl_fast: 143 fma instructions   [clang -O2 -march=native -ffp-contract=fast]
+cl_def:    0                    [clang -O2 -march=native]
+gc_def:    0                    [gcc   -O2 -march=native]
+
+gcc default == clang default : identical over 100000 signatures
+<span style="color:var(--signal);font-weight:600;">clang -ffp-contract=fast vs clang default : 12 of 100000 differ  (1.2e-4)</span></pre>
+
+<p>3 つとも同一シードから同一の秘密鍵を作る ― 鍵生成も FFT を回すので、仮定せず確認した。食い違った 12 組を 2024/1709 §5.1 の復元にかける（見えるのは 2 つの署名・公開鍵・メッセージだけ）:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>メッセージ</th><th class="num">差の係数数</th><th>結果</th></tr></thead>
+<tbody>
+<tr><td class="mono">8861</td><td class="num">916 / 1024</td><td><span class="win">鍵復元</span> · <span class="mono">x²⁵⁶(f,g)</span></td></tr>
+<tr><td class="mono">23215</td><td class="num">966 / 1024</td><td><span class="win">鍵復元</span> · <span class="mono">−x⁰(f,g)</span></td></tr>
+<tr><td class="mono">23823</td><td class="num">916 / 1024</td><td><span class="win">鍵復元</span> · <span class="mono">−x²⁵⁶(f,g)</span></td></tr>
+<tr><td class="mono">69227, 69647, 78710, 85161, 87268</td><td class="num">916 / 1024</td><td><span class="win">鍵復元</span> · さらに 5 件</td></tr>
+<tr><td class="mono">7655, 15028, 38958, 66120</td><td class="num">1020–1023 / 1024</td><td><span class="mono">(a,b)</span> なし ― <em>最初の 2 回</em>での発散（§04）</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>12 件中 8 件。</strong>復元された鍵はいずれも保存鍵の厳密な NTRU 対称 <span class="mono">±x^k(f,g)</span> で、<span class="mono">‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822</span> ― 近似ではなく<em>使える</em>秘密鍵である。残る 4 件は §04 のチャネルそのもの: <span class="mono">Δz</span> が 2-疎でないことを厳密除算の失敗が証明し、内部の整数中心は 1.02×10⁸ 回引いて 0 件だった。差の係数数がきれいに分かれるので、攻撃者は 2 つのチャネルを区別できる。4/12 という比は、まったく別の摂動源であるにもかかわらず同論文 Table 2 の 30/70 に近い。FALCON-1024 でも再現する ― 6 万本中 6 本。</p>
+
+<h3>陰性対照が価値の半分である</h3>
+
+<p>「参照実装のビルドどうしが食い違う」という結果は、普通のビルドの選択でも食い違うのなら、警告としては強くても<em>使えない</em> ― どの差が効いたか言えないからだ。食い違わない。各 3 万署名で:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>ビルド構成</th><th>署名列</th></tr></thead>
+<tbody>
+<tr><td><span class="mono">gcc -O2</span> · native double</td><td rowspan="8" style="vertical-align:middle;"><span class="win">8 通りすべてバイト一致</span></td></tr>
+<tr><td><span class="mono">gcc -O2 -march=native</span></td></tr>
+<tr><td><span class="mono">gcc</span> · 参照実装の AVX2 版 FFT</td></tr>
+<tr><td><span class="mono">gcc -O2</span> · emulated FP</td></tr>
+<tr><td><span class="mono">gcc -march=native</span> · emulated</td></tr>
+<tr><td><span class="mono">clang -O2</span> · native double</td></tr>
+<tr><td><span class="mono">clang</span> · AVX2 経路</td></tr>
+<tr><td><span class="mono">clang -O2</span> · emulated FP</td></tr>
+<tr><td><span class="mono">clang -O2 -march=native -ffp-contract=fast</span></td><td><span class="lose">8 通りすべてと食い違う</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>2 コンパイラ、native 対 emulated、baseline 対 <span class="mono">-march=native</span>、そして参照実装が別に持つ AVX2 版 FFT ― 全部ビット一致する。emulated と native が一致することは単独で意味がある: 参照実装の <span class="mono">config.h</span> は「native FPU は determinism に影響しうる差を生む」から emulation を薦めているが、ここでは生まない。発散はすべて旗ひとつに帰属する ― <span class="mono">-Ofast</span> と <span class="mono">-ffast-math</span> のどちらもその旗を含む。</p>
+
+<div class="note">
+<span class="eyebrow">いま FN-DSA とこれの間に立っているもの</span>
+<p>偶然である。native ビルドは <span class="mono">double</span> を <span class="mono">typedef struct { double v; } fpr;</span> で包み、<span class="mono">fpr.h</span> はその理由を書いている ― 生の演算子を使ったらコンパイラに叱ってほしいから。誰も書き残していない第二の効果がある。GCC は我々が試したどの設定でもこのラッパ越しに縮約せず、clang も <span class="mono">-ffp-contract=fast</span> のときだけ縮約する。型安全のためのイディオムが、ヘッダの中で、別のことを書いた注釈の下で、暗号的な仕事をしている。我々は一つ前の版で「GCC と clang の<em>既定</em>が食い違う」と書いた。建てて測ったらそれは誤りで、訂正後の主張 ― 2 つのコンパイラではなく旗ひとつ ― は、より狭く、より鋭い。</p>
+</div>
+
+<span class="secnum">06 — 位置づけ</span>
 <h2>何が新しく、何が新しくないか</h2>
-<p>正直な位置づけが、貢献のほとんどだ。演算の機構、参照実装の 2 モードが発散すること、幅への非感受性 ― すべて ePrint 2024/1709 の結果である。我々はそれらを独立に追認し、2 点を加える。</p>
+<p>正直な位置づけが、貢献のほとんどだ。演算の機構、参照実装の 2 モードが発散すること、幅への非感受性 ― すべて ePrint 2024/1709 の結果である。我々はそれらを独立に追認し、その上に積む。</p>
 <div class="tbl-wrap">
 <table>
 <thead><tr><th></th><th>ePrint 2024/1709</th><th>本稿</th></tr></thead>
@@ -303,6 +400,9 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 <tr class="hl"><td>複素除算・D11 (I a,b)</td><td><strong>存在しない</strong></td><td><strong>7.5×10⁻⁶ で鍵回復位置。§7.2 で塞がらない</strong></td></tr>
 <tr><td>Heuristic 1</td><td>帰結を測定</td><td>原因を直接測定</td></tr>
 <tr><td>偶数 ‖(g,−f)‖²</td><td>C の癖として指摘</td><td>独立に追認</td></tr>
+<tr class="hl"><td>最初の 2 回</td><td>脇に置く ―「鍵復元を可能にするほど短くない」</td><td><strong>事象だけで <span class="mono">F_q</span> 上から鍵復元</strong>（§04）</td></tr>
+<tr class="hl"><td>摂動源としての FMA</td><td>ありうるとして提起（§6.2）</td><td><strong>参照実装、2 通りの適合ビルド：10万中12本、鍵8本</strong>（§05）</td></tr>
+<tr><td>オラクルの要件</td><td>―</td><td>両側の窓、両端とも実測</td></tr>
 </tbody>
 </table>
 </div>
@@ -343,7 +443,7 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 <p>footnote 6 は構成上正しい（Mitaka の <span class="mono">normaldist</span> が中心を連続化、HAWK の署名は全整数で FP FFT は<em>検証側</em>のみ）。ここから2条件則が出る：感受性には<strong>(a) 署名サンプラの浮動小数点</strong>と<strong>(b) 小分母の有理中心</strong>の両方が要る。Falcon だけが両方を満たす ― 危険は格子署名一般ではなく Falcon 固有の設計に起因し、修正は FN-DSA に属する。</p>
 
 
-<span class="secnum">05 — 破って、直す</span>
+<span class="secnum">07 — 破って、直す</span>
 <h2>対策の半分では何も守れない ― そして、より簡単な代替</h2>
 
 <p>ePrint 2024/1709 §7.1 の対策は2部構成：(1) <span class="mono">SamplerZ</span> を<em>四捨五入</em>版（Algorithm 4）に置換し、不安定点を整数から半整数へ移す。(2) <span class="mono">‖(g,−f)‖²</span> を<strong>奇数</strong>に制限し、半整数中心を不可能にする。実装した。5 つの (μ,σ) で各 20 万標本の χ² は χ²/df = 0.72〜1.02 ― Algorithm 4 は分布的に健全（独立確認）。</p>
@@ -399,7 +499,7 @@ A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good
 </div>
 <p>正直な限界を4つ：10⁻⁹ の余裕は<em>実測であって証明ではない</em>。使えるのは g が既知かつ 2⁵³ 未満の位置のみ。「1200 本中 0 本」の健全性検査は<em>検出力がほぼ無い</em>（期待変化数 ≈0.3）ので分布検定は実質未実施。実装は確保を伴い定数時間でなく、r が [0,1) を外れる場合がある。<strong>有望な方向であって、完成した対策ではない。</strong></p>
 
-<span class="secnum">06 — 性能</span>
+<span class="secnum">08 — 性能</span>
 <h2>どれくらい速いか、何に対して</h2>
 <p>1 台（4 コア、FMA 付き x86-64 ― 1 台という制約は実在し、隠さない）。変えられるものは変えた ― C は 2 コンパイラ・3 最適化レベル・エミュ対ネイティブ浮動小数点、Julia は 3 最適化レベル、そして run 間分布の中央値を報告する。</p>
 <div class="tbl-wrap">
@@ -424,22 +524,28 @@ A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good
 </ul>
 <p>n=1024 では傾向が鋭くなる ― 検証は再び最速（0.031 ms 対 最速 C 0.035、Python の 245 倍）、署名はエミュ C の ≈1.7 倍・Python の 18.8 倍、鍵生成は Python の 296 倍だが今度はエミュ C にも ≈1.3 倍遅い（<code class="inl">BigInt</code> 対 RNS の差が次数で開く）。特筆すべきは <strong>Julia −O2 が 512 で、−O3 が 1024 で勝つ</strong>こと ― 最良のレベルは演算ごとで、1 レベルだけ報告すれば実装を誤って伝える。鍵生成は長い最適化の到達点でもある ― 最初の動作版は 9610 ms で、9.78 ms への道はほぼ全て確保の除去であり、高水準の配列書き換えではなかった。</p>
 
-<span class="secnum">07 — 範囲と限界</span>
+<span class="secnum">09 — 範囲と限界</span>
 <h2>定数時間性、そしてまだ言えないこと</h2>
 <p>この実装は定数時間<strong>ではなく</strong>、目指してもいない。定数時間実装ならできない事をする箇所には <code class="inl">CONSTANT TIME:</code> コメントを残した。Julia 実装は実装由来のチャネル（GC・JIT・境界検査・ディスパッチ）を一切閉じられない ― だからこそここでの仕様レベルの問いにはきれいな計測器で、配備用の署名器としては不向きなのだ。していない側面攻撃の貢献を主張するのでなく、そう明記する。</p>
 <p>未解決として明示するもの：</p>
 <ul>
 <li><strong>A2a / A2b は分離できていない</strong> ― 複素除算単独と <span class="mono">D11</span> 単独はどちらも 0/10万。単独率 ≈3.75×10⁻⁶ をゼロから分けるには数百万署名が要り、そこまで到達していない。二つ合わせれば署名に届く、とは言えるが、どちらが効くかは言えない。</li>
 <li><strong>A2 と A1 の率は区別できない</strong> ― 点推定で 2.5 倍だが、92.5 万本のプールで p ≈ 0.23。順序ではなく「同程度」と報告する。</li>
-<li><strong>§6.1 の非対称性</strong>は同論文も未解決とし、我々も解けていない。</li>
-<li><strong>FALCON-1024</strong> は低volume（35万本、1 件）で測定。率の推定は緩いが、その 1 件が機構を完全になぞるので、再現は確立された。</li>
+<li><strong>非対称性</strong>には機構を与えたが、較正済みの法則は与えていない ― 比の推定 3 通りが一桁にまたがり、突き合わせられていない。</li>
+<li><strong>事象チャネルは両端を測ったが、両端をつないでは走らせていない。</strong>§04 が解法、§05 がオラクルだが、合成は算術である ― 情報のある事象が 1 問い合わせあたり 3.3×10⁻⁵ なので、511 行には約 1.5×10⁷ 組、丸一日規模が要り、そこは払っていない。§04 はシンドロームをハッシュでなく一様に引いてもいる。</li>
+<li><strong>縮約の結果は 1 台のマシン、1 組のコンパイラである。</strong>aarch64（FMA が基本 ISA にある）も MSVC も他のバージョンも試していない。<span class="mono">fpr</span> ラッパが縮約を止めるのが頑健なのか、この 2 バージョンの偶然なのかは、より広い調査でしか言えない。</li>
+<li><strong>検証の速さ</strong>は最速の C ビルドを約 10% 上回るが、これはビルドオプションだけで生じるばらつきの内側である。擁護できる主張は「C と同等」であって順位ではない。</li>
+<li><strong>FALCON-1024</strong> は書き方の差については低volume（35万本、1 件）だが、縮約の結果はここでも再現する（6万本中 6 本）。</li>
 </ul>
 
-<span class="secnum">08 — 提言</span>
+<span class="secnum">10 — 提言</span>
 <h2>FIPS 206 がすべきこと</h2>
 <p>FIPS 206 がビット一致 KAT を求めるなら：</p>
 <ol>
-<li><strong>書き方を固定する</strong> ― 複素除算・<span class="mono">D11</span>・最下段 <span class="mono">ffSampling</span> を明示するか、より良くは ePrint 2024/1709 §7.1 の構造的修正（中心を <span class="mono">floor</span> でなく <span class="mono">round</span> でサンプルし、‖(g,−f)‖² を奇数に制限）を採る。後者は感受性そのものを除く。ただし現状の C 鍵生成が ‖(g,−f)‖² を偶数に強制しているので、そのパリティ条件の緩和も要る。</li>
+<li><strong><span class="mono">FP_CONTRACT</span> を規範として off と書く。</strong>これを最初に置く。§05 がその代価である ― 旗ひとつで 10 万本中 12 本の食い違いと 8 本の秘密鍵。<span class="mono">-Ofast</span> と <span class="mono">-ffast-math</span> はどちらもその旗を含む。いま参照実装を守っているのは型安全イディオムの文書化されていない副作用であり、偶然は仕様ではない。</li>
+<li><strong>最後の 2 回だけの修正は修正でない、と書く。</strong>§04 は最初の 2 回の事象から鍵を復元する。2024/1709 §5 があの位置を無害とみなす理由は成り立たないので、その理由に依拠した対策には別の根拠が要る。</li>
+<li><strong>浮動小数点環境が対象かを書く。</strong>周囲の IEEE-754 丸め方向以外はすべて適合している署名器は、ノルム条件を満たしたまま<em>検証に落ちる</em>署名を出す ― FE_UPWARD / FE_DOWNWARD で 200 本中 0 本が有効。これは決定性ではなく正当性の要件で、現行のどの本文にも書かれていない。</li>
+<li><strong>書き方を固定する</strong> ― 複素除算・<span class="mono">D11</span>・最下段 <span class="mono">ffSampling</span> を明示するか、より良くは ePrint 2024/1709 §7.1 の構造的修正（中心を <span class="mono">floor</span> でなく <span class="mono">round</span> でサンプルし、‖(g,−f)‖² を奇数に制限）を採る。後者は感受性そのものを除く。ただし<em>両方の part を同じ条項で義務づける</em>こと ― <span class="mono">round</span> にすると <span class="mono">q</span> が奇数なので最初の 2 回は無条件に閉じるが、最後の 2 回（最も安い鍵復元位置）は以前とまったく同じだけ露出したままになる。また現状の C 鍵生成が ‖(g,−f)‖² を偶数に強制しているので、そのパリティ条件の緩和も要る。</li>
 <li><strong><span class="mono">fpr_inv_sigma</span> を全精度で公表する</strong> ― 丸めた σ から導かせず、中間値が KAT の対象かを述べる。</li>
 <li><strong>σ_min の ε を明記する</strong>、あるいは導出を。</li>
 <li><strong>SamplerZ のバイト組み立て規約を</strong>ベクタと並べて記す。</li>
@@ -448,10 +554,12 @@ A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good
 <footer>
 <p><strong>全て再現できる。</strong>各図は名前付きスクリプトが生成し、注記のある所を除き C コンパイラなしで再検証できる。</p>
 <p class="mono">julia --project=falcon -e 'using Pkg; Pkg.test()'  ·  「byte for byte」テストセット<br>
-julia … falcon/scripts/divergence_rate.jl 100 1000  ·  §3<br>
-julia … falcon/scripts/heuristic1_check.jl 100 1000  ·  §4<br>
-sh falcon/scripts/bench_all.sh  ·  §5</p>
-<p>本文：<span class="mono">docs/paper.md</span> · 測定記録：<span class="mono">docs/debug_log.md</span> #046–#056 · NIST 意見草案：<span class="mono">docs/nist_comment_draft.md</span>。テスト 61521 件合格。</p>
+julia … falcon/scripts/divergence_rate.jl 100 1000  ·  §03<br>
+julia … falcon/scripts/event_solve.jl  ·  §04、事象だけからの鍵復元<br>
+julia … falcon/scripts/window.jl all 200 1200  ·  §04、窓の両端<br>
+sh falcon/scripts/cref_contract.sh 100000  ·  §05、C 参照実装の 2 ビルド<br>
+sh falcon/scripts/bench_all.sh  ·  §08</p>
+<p>本文：<span class="mono">docs/paper.md</span> · 測定記録：<span class="mono">docs/debug_log.md</span> #046–#071 · NIST 意見草案：<span class="mono">docs/nist_comment_draft.md</span>。テスト 61708 件合格。</p>
 </footer>
 
 </div>
