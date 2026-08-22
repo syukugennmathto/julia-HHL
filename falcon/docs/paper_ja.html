@@ -135,7 +135,7 @@
 <header class="mast">
   <span class="eyebrow">FALCON / FN-DSA · 実装研究</span>
   <h1>忠実な二羽のFALCON</h1>
-  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。どれくらいの頻度で、どこで牙をむくのかを測った。</p>
+  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。頻度を測り、提案された対策を破り、より良い対策を作った。</p>
   <div class="meta">
     <span><b>独立実装</b> · Julia、仕様書から</span>
     <span><b>参照実装</b> · round-3 v1.2 の C と Python</span>
@@ -153,9 +153,9 @@
     <div class="d">我々の署名は、記録した全ベクタで C 参照実装とビット単位で一致する。</div>
   </div>
   <div class="stat">
-    <div class="k">新しい発散 (A2)</div>
-    <div class="v sig">鍵を復元</div>
-    <div class="d">複素除算と <span class="mono">D11</span> が 7.5×10⁻⁶ で署名を変え、その1ペアから秘密鍵を復元できる。</div>
+    <div class="k">提案された対策</div>
+    <div class="v sig">破れた</div>
+    <div class="d">ePrint 2024/1709 §7.1 を実装者が配備できる形で入れても、鍵は取れる ― 3/3。</div>
   </div>
   <div class="stat">
     <div class="k">検証の速さ</div>
@@ -342,7 +342,64 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 </div>
 <p>footnote 6 は構成上正しい（Mitaka の <span class="mono">normaldist</span> が中心を連続化、HAWK の署名は全整数で FP FFT は<em>検証側</em>のみ）。ここから2条件則が出る：感受性には<strong>(a) 署名サンプラの浮動小数点</strong>と<strong>(b) 小分母の有理中心</strong>の両方が要る。Falcon だけが両方を満たす ― 危険は格子署名一般ではなく Falcon 固有の設計に起因し、修正は FN-DSA に属する。</p>
 
-<span class="secnum">05 — 性能</span>
+
+<span class="secnum">05 — 破って、直す</span>
+<h2>提案された対策を破り、置き換える</h2>
+
+<p>ePrint 2024/1709 §7.1 の対策は2部構成：(1) <span class="mono">SamplerZ</span> を<em>四捨五入</em>版（Algorithm 4）に置換し、不安定点を整数から半整数へ移す。(2) <span class="mono">‖(g,−f)‖²</span> を<strong>奇数</strong>に制限し、半整数中心を不可能にする。実装した。5 つの (μ,σ) で各 20 万標本の χ² は χ²/df = 0.72〜1.02 ― Algorithm 4 は分布的に健全（独立確認）。</p>
+
+<div class="note">
+<span class="eyebrow">破れた点</span>
+part 2 は<strong>参照実装の鍵生成では不可能</strong>（f と g の<em>両方</em>の係数和を奇数に強制 → 和は偶数。3200 鍵中 奇数は 0）。よって配備されるのは part 1 のみ。そして中心 <span class="mono">n/g</span> が半整数になるのは <span class="mono">g</span> が<strong>偶数</strong>のときだけ。最初の2回は <span class="mono">g = q = 12289</span> ＝<strong>奇数</strong> → 完全免疫。最後の2回は <span class="mono">g = ‖(g,−f)‖²</span> ＝<strong>偶数</strong> → 全く免疫しない。しかも最初の2回は<em>無害</em>な位置、最後の2回は鍵の全復元位置。
+</div>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>位置</th><th>g</th><th class="num">整数中心</th><th class="num">半整数中心</th></tr></thead>
+<tbody>
+<tr><td>呼び出し 1, 2</td><td>q = 12289（奇）</td><td class="num">5</td><td class="num win">0</td></tr>
+<tr class="hl"><td>呼び出し 2n−1, 2n</td><td>‖(g,−f)‖²（偶）</td><td class="num">7</td><td class="num lose">11</td></tr>
+</tbody>
+</table>
+</div>
+<figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;">各端 10 万標本。<span class="mono">floor</span> では 12 件中 7 件が危険端。<span class="mono">round</span>（鍵生成を変えず）では<strong>11 件すべて</strong>が危険端。</figcaption>
+
+<p>そこで対策を<em>入れたまま</em>攻撃を通した。参照鍵に Algorithm 4 を配備、16 万署名：半整数近傍中心 29 件、発散 3 件、そして<strong>3/3 で秘密鍵を復元</strong> ― いずれも格子対称を除いて厳密に格納鍵と一致。</p>
+<pre><span class="cm"># scripts/countermeasure_break.jl</span>
+DIVERGENCE key 20 sig  562 : 909/1024 相違
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^256 (f,g)
+DIVERGENCE key 41 sig 1346 : 900/1024 相違
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^0   (f,g)
+DIVERGENCE key 82 sig 1054 : 936/1024 相違
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-2,0)  = -x^256 (f,g)
+
+対策あり : 3/160000 = 1.9e-5
+対策なし : 10/525000 = 1.9e-5   <span class="cm"># 変わらない</span></pre>
+<p><em>完全な</em>対策の数学は健全（t 奇数なら m₂, m₃ も奇数で半整数中心はどこにも存在しない）。破れたのは数学ではなく<strong>配備可能性</strong>。</p>
+
+<h3>置き換え：中心を厳密な有理数にスナップする</h3>
+<p>敏感位置では厳密な中心が <span class="mono">n/g</span> で、<em>分母 g は署名者が既に知っている</em>。浮動小数点の中心は ~10⁻¹³ の精度なので <span class="mono">g·μ̂</span> は整数 <span class="mono">n</span> から ~1.6×10⁻⁹ 以内 ― 破るのに必要な 0.5 に対して<strong>7 桁の余裕</strong>（実測最大残差 1.4×10⁻⁹ と 2.4×10⁻⁸、各 10 万標本）。よって <span class="mono">n = round(g·μ̂)</span> は厳密、<span class="mono">s = fld(n, g)</span> は純整数演算。</p>
+<pre><span class="cm"># scripts/snapping.jl — 本企画が見つけた全発散ペア</span>
+A2 key 70 sig  534   off: 463/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A2 key 65 sig 1239   off: 498/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A2 key 68 sig 1885   off: 457/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+
+健全性: 通常署名 1200 本中 0 本しか変わらない</pre>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th></th><th>2024/1709 §7.1</th><th>rational snapping</th></tr></thead>
+<tbody>
+<tr><td>サンプラ変更</td><td>Algorithm 4 に置換</td><td>1024 回中 4 回で 3 行</td></tr>
+<tr class="hl"><td>鍵生成の変更</td><td class="lose">必須 — 参照実装では不可能</td><td class="win">不要</td></tr>
+<tr><td>出力分布</td><td>新 base sampler・新たな証明義務</td><td>不変（1200 本中 0 本）</td></tr>
+<tr><td>配備経路での効果</td><td class="lose">鍵復元が成功したまま</td><td class="win">既知の発散が全消滅</td></tr>
+</tbody>
+</table>
+</div>
+<p>正直な限界を2つ：10⁻⁹ の余裕は<em>実測であって証明ではない</em>（標準が依拠するなら前進誤差の上界を書くべき）。また snapping が使えるのは g が既知かつ 2⁵³ 未満の位置＝最初と最後の 6 回（内部は守る必要がない ― 1.02×10⁸ ドローで整数中心 0 件）。</p>
+
+<span class="secnum">06 — 性能</span>
 <h2>どれくらい速いか、何に対して</h2>
 <p>1 台（4 コア、FMA 付き x86-64 ― 1 台という制約は実在し、隠さない）。変えられるものは変えた ― C は 2 コンパイラ・3 最適化レベル・エミュ対ネイティブ浮動小数点、Julia は 3 最適化レベル、そして run 間分布の中央値を報告する。</p>
 <div class="tbl-wrap">
@@ -367,7 +424,7 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 </ul>
 <p>n=1024 では傾向が鋭くなる ― 検証は再び最速（0.031 ms 対 最速 C 0.035、Python の 245 倍）、署名はエミュ C の ≈1.7 倍・Python の 18.8 倍、鍵生成は Python の 296 倍だが今度はエミュ C にも ≈1.3 倍遅い（<code class="inl">BigInt</code> 対 RNS の差が次数で開く）。特筆すべきは <strong>Julia −O2 が 512 で、−O3 が 1024 で勝つ</strong>こと ― 最良のレベルは演算ごとで、1 レベルだけ報告すれば実装を誤って伝える。鍵生成は長い最適化の到達点でもある ― 最初の動作版は 9610 ms で、9.78 ms への道はほぼ全て確保の除去であり、高水準の配列書き換えではなかった。</p>
 
-<span class="secnum">06 — 範囲と限界</span>
+<span class="secnum">07 — 範囲と限界</span>
 <h2>定数時間性、そしてまだ言えないこと</h2>
 <p>この実装は定数時間<strong>ではなく</strong>、目指してもいない。定数時間実装ならできない事をする箇所には <code class="inl">CONSTANT TIME:</code> コメントを残した。Julia 実装は実装由来のチャネル（GC・JIT・境界検査・ディスパッチ）を一切閉じられない ― だからこそここでの仕様レベルの問いにはきれいな計測器で、配備用の署名器としては不向きなのだ。していない側面攻撃の貢献を主張するのでなく、そう明記する。</p>
 <p>未解決として明示するもの：</p>
@@ -378,7 +435,7 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 <li><strong>FALCON-1024</strong> は低volume（35万本、1 件）で測定。率の推定は緩いが、その 1 件が機構を完全になぞるので、再現は確立された。</li>
 </ul>
 
-<span class="secnum">07 — 提言</span>
+<span class="secnum">08 — 提言</span>
 <h2>FIPS 206 がすべきこと</h2>
 <p>FIPS 206 がビット一致 KAT を求めるなら：</p>
 <ol>

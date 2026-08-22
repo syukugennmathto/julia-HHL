@@ -207,7 +207,7 @@
 <header class="mast">
   <span class="eyebrow">FALCON / FN-DSA · implementation study</span>
   <h1>Two Faithful Falcons</h1>
-  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. We measured how often, and where it bites.</p>
+  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. We measured how often, broke the proposed fix, and built a better one.</p>
   <div class="meta">
     <span><b>Independent implementation</b> · Julia, from the spec</span>
     <span><b>Reference</b> · round-3 v1.2 C &amp; Python</span>
@@ -227,9 +227,9 @@
     <div class="d">Our signatures equal the C reference's, bit for bit, on every recorded vector.</div>
   </div>
   <div class="stat">
-    <div class="k">New divergence (A2)</div>
-    <div class="v sig">key recovered</div>
-    <div class="d">Complex division + <span class="mono">D11</span> change the signature at 7.5×10⁻⁶ — and from one such pair we reconstruct the private key.</div>
+    <div class="k">Proposed countermeasure</div>
+    <div class="v sig">broken</div>
+    <div class="d">With ePrint 2024/1709 §7.1 deployed as an implementer can deploy it, we still recover keys — 3 of 3.</div>
   </div>
   <div class="stat">
     <div class="k">Verification speed</div>
@@ -430,7 +430,64 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 </div>
 <p>Footnote 6 holds by construction (Mitaka's <span class="mono">normaldist</span> makes the centre continuous; HAWK's signing is all-integer, its only FP FFT being in the <em>verifier</em>). The exercise gives a two-condition rule: the sensitivity needs <strong>both</strong> (a) floating point in the signing sampler <strong>and</strong> (b) a small-denominator rational centre. Falcon alone has both — so the hazard is specific to its design, and the fix belongs in FN-DSA, not a generic lattice-signature guideline.</p>
 
-<span class="secnum">05 — Performance</span>
+
+<span class="secnum">05 — Break &amp; fix</span>
+<h2>We break the proposed countermeasure — then replace it</h2>
+
+<p>ePrint 2024/1709 §7.1 proposes the structural fix in two parts: (1) replace <span class="mono">SamplerZ</span> with a <em>rounding</em> sampler (Algorithm 4), moving the instability from integers to half-integers; and (2) force <span class="mono">‖(g,−f)‖²</span> <strong>odd</strong>, which makes half-integer centres impossible. We implemented it. The χ² test over 200k samples at five (μ,σ) pairs gives χ²/df of 0.72–1.02, so Algorithm 4 is distributionally sound — an independent confirmation.</p>
+
+<div class="note">
+<span class="eyebrow">The break</span>
+Part 2 is <strong>impossible on the reference key generator</strong>, which forces the coefficient sums of both <span class="mono">f</span> and <span class="mono">g</span> odd, so their sum is even — 0 odd keys in 3200 generated. So part 1 is what ships. And a centre <span class="mono">n/g</span> is a half-integer only when <span class="mono">g</span> is <strong>even</strong>. At the first two calls <span class="mono">g = q = 12289</span> is <strong>odd</strong> → rounding immunises them completely. At the last two <span class="mono">g = ‖(g,−f)‖²</span> is <strong>even</strong> → rounding immunises nothing. And the first two are the <em>harmless</em> positions; the last two are full key recovery.
+</div>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>position</th><th>g</th><th class="num">integer centres</th><th class="num">half-integer centres</th></tr></thead>
+<tbody>
+<tr><td>calls 1, 2</td><td>q = 12289 (odd)</td><td class="num">5</td><td class="num win">0</td></tr>
+<tr class="hl"><td>calls 2n−1, 2n</td><td>‖(g,−f)‖² (even)</td><td class="num">7</td><td class="num lose">11</td></tr>
+</tbody>
+</table>
+</div>
+<figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;">100,000 samples per end. Under <span class="mono">floor</span>, 7 of 12 exposures sit at the dangerous end; under <span class="mono">round</span> without the key-generation change, <strong>all 11 do</strong>.</figcaption>
+
+<p>So we ran the whole attack <em>through</em> the countermeasure. Over 160,000 signatures with Algorithm 4 deployed on reference keys: 29 near-half-integer centres, 3 divergent pairs, and <strong>3 of 3 private keys recovered</strong> — each verified as exactly the stored key up to the NTRU lattice's symmetries.</p>
+<pre><span class="cm"># scripts/countermeasure_break.jl</span>
+DIVERGENCE key 20 sig  562 : 909/1024 differ
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^256 (f,g)
+DIVERGENCE key 41 sig 1346 : 900/1024 differ
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^0   (f,g)
+DIVERGENCE key 82 sig 1054 : 936/1024 differ
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-2,0)  = -x^256 (f,g)
+
+rate with the countermeasure : 3/160000 = 1.9e-5
+rate without it              : 10/525000 = 1.9e-5   <span class="cm"># unchanged</span></pre>
+<p>The mathematics of the <em>full</em> countermeasure is sound — with <span class="mono">t</span> odd, <span class="mono">m₂</span> and <span class="mono">m₃</span> are odd too and half-integer centres cannot occur anywhere. What breaks is its <strong>deployability</strong>.</p>
+
+<h3>The replacement: snap the centre to its exact rational</h3>
+<p>At the sensitive positions the exact centre is <span class="mono">n/g</span> and the <em>signer already knows</em> <span class="mono">g</span>. The FP centre approximates it to ~10⁻¹³, so <span class="mono">g·μ̂</span> lands within ~1.6×10⁻⁹ of the integer <span class="mono">n</span> — seven orders of margin against the 0.5 that would break it (measured max residual: 1.4×10⁻⁹ and 2.4×10⁻⁸ over 100k samples each). So <span class="mono">n = round(g·μ̂)</span> is exact, and <span class="mono">s = fld(n, g)</span> is pure integer arithmetic.</p>
+<pre><span class="cm"># scripts/snapping.jl — every divergent pair this project has found</span>
+A2 key 70 sig  534   off: 463/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A2 key 65 sig 1239   off: 498/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A2 key 68 sig 1885   off: 457/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+
+sanity: snapping changed 0 of 1200 ordinary signatures</pre>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th></th><th>2024/1709 §7.1</th><th>rational snapping</th></tr></thead>
+<tbody>
+<tr><td>sampler change</td><td>replace with Algorithm 4</td><td>3 lines at 4 of 1024 calls</td></tr>
+<tr class="hl"><td>key-generation change</td><td class="lose">required — impossible on the reference generator</td><td class="win">none</td></tr>
+<tr><td>output distribution</td><td>new base sampler, new proof obligation</td><td>unchanged (0 of 1200 moved)</td></tr>
+<tr><td>on the deployable path</td><td class="lose">key recovery still succeeds</td><td class="win">all known divergences removed</td></tr>
+</tbody>
+</table>
+</div>
+<p>Two honest caveats: the 10⁻⁹ margin is <em>measured, not proved</em> — a standard relying on it should state a forward-error bound — and snapping applies only where <span class="mono">g</span> is known and below 2⁵³ (the first and last six calls; the interior needs no protection, with 0 integer centres in 1.02×10⁸ draws).</p>
+
+<span class="secnum">06 — Performance</span>
 <h2>How fast, against what</h2>
 
 <p>One machine (4 cores, x86-64 with FMA — the single-machine limit is real and unhidden). We vary what we can: two compilers, three optimization levels, emulated vs native floating point for C; three optimization levels for Julia; and report medians over the run-to-run distribution.</p>
@@ -459,7 +516,7 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 
 <p>At n=1024 the pattern sharpens: verification is again the fastest measured (0.031&nbsp;ms vs best C 0.035, 245× Python), signing is ≈1.7× faster than emulated C and 18.8× faster than Python, and key generation is 296× faster than Python but now ≈1.3× slower than even emulated C — the <code class="inl">BigInt</code>-vs-RNS gap widens with degree. Notably, <strong>Julia −O2 wins at 512 and −O3 wins at 1024</strong>: the best level is per-operation, and reporting one level would misrepresent the implementation. Key generation is also the endpoint of a long optimization — 9610&nbsp;ms in the first working version — reached almost entirely by removing allocation, not by high-level array rewriting.</p>
 
-<span class="secnum">06 — Scope &amp; limits</span>
+<span class="secnum">07 — Scope &amp; limits</span>
 <h2>Constant time, and what we can't yet say</h2>
 
 <p>This implementation is <strong>not</strong> constant-time and does not try to be. Where the code does something a constant-time implementation could not, a <code class="inl">CONSTANT TIME:</code> comment marks it. A Julia implementation cannot close the implementation-level channels (GC, JIT, bounds checks, dispatch) at all — which is precisely why it is a clean instrument for the specification-level question here, and a poor vehicle for a deployable signer. We state this rather than claim a side-channel contribution we did not make.</p>
@@ -472,7 +529,7 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 <li><strong>FALCON-1024</strong> is measured at lower volume (350k, one event); the rate there is loose, but the one event carries the full mechanism, so replication is established.</li>
 </ul>
 
-<span class="secnum">07 — Recommendations</span>
+<span class="secnum">08 — Recommendations</span>
 <h2>What FIPS 206 should do</h2>
 <p>If FIPS&nbsp;206 requires bit-exact KAT agreement:</p>
 <ol>
