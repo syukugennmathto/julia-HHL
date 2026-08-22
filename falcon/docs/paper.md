@@ -42,7 +42,11 @@ requires, only the rounding sampler ships — and since `q = 12289` is odd while
 `‖(g,−f)‖²` is always even, rounding immunises exactly the *harmless* sampler
 positions and leaves every full-key-recovery position exposed. With that
 countermeasure in place we still recover the private key, from 3 of 3 divergent
-pairs found in 160000 signatures, at an unchanged rate of 1.9 × 10⁻⁵. Performance: this
+pairs found in 160000 signatures, at an unchanged rate of 1.9 × 10⁻⁵. We then
+propose a repair that needs no key-generation change — snapping the centre to
+its exact rational value, which the signer can do because it knows the
+denominator — and show it removes every divergence we have found while leaving
+1200 ordinary signatures bit-identical. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -164,7 +168,10 @@ for this particular question.
    the rational structure of the centres directly, and then recover private keys
    *with the countermeasure running* — 3 of 3 divergent pairs, at an unchanged
    1.9 × 10⁻⁵ — because `q` is odd while the reference's `‖(g,−f)‖²` is always
-   even, so rounding immunises only the harmless positions.
+   even, so rounding immunises only the harmless positions. We then give a
+   replacement countermeasure (§7.2) that requires no key-generation change,
+   uses exact integer arithmetic with seven orders of margin, removes every
+   divergence found, and leaves ordinary signatures unchanged.
 
 We are equally explicit about what is **not** a contribution. The arithmetic
 mechanism (an integer centre passing through `floor`), the fact that the
@@ -747,6 +754,59 @@ deploy today is part 1 alone, and part 1 alone leaves the key-recovery exposure
 untouched. Any FIPS 206 text that adopts the rounding sampler **must** adopt the
 key-generation parity change in the same breath, and must say so explicitly.
 
+### 7.2 A countermeasure that needs no key-generation change
+
+The break in §7.1 is a deployment failure, not a mathematical one, and it
+suggests its own repair. At the sensitive positions the exact centre is a
+rational `n/g` whose denominator the **signer already knows**: `g = q` at the
+first two calls, `g = ‖(g,−f)‖²` at the last two. The floating-point centre
+`μ̂` approximates `n/g` to about 10⁻¹³, so `g·μ̂` sits within `g·10⁻¹³ ≈ 1.6×10⁻⁹`
+of the integer `n`. Therefore
+
+    n = round(g · μ̂)        recovers the numerator exactly,
+    s = fld(n, g)           is then exact integer arithmetic,
+
+and the split of the centre stops depending on floating point at exactly the
+places where that dependence is dangerous. The margin is not marginal: §7.1(ii)
+measured `max |g·μ̂ − round(g·μ̂)|` at 1.4×10⁻⁹ (first two calls) and 2.4×10⁻⁸
+(last two) over 100000 samples each, against the 0.5 that would be needed to
+break the rounding — seven orders of magnitude of slack.
+
+Replaying every divergent pair this project has found, with the exact split off
+and then on (`scripts/snapping.jl`):
+
+```
+A2 key 70 sig  534   off: 463 of 512 differ  DIVERGE   on: 0  AGREE
+A2 key 65 sig 1239   off: 498 of 512 differ  DIVERGE   on: 0  AGREE
+A2 key 68 sig 1885   off: 457 of 512 differ  DIVERGE   on: 0  AGREE
+A1 key  4 sig  105   off: 455 of 512 differ  DIVERGE   on: 0  AGREE
+```
+
+And it changes nothing else: over 1200 ordinary signatures with the same
+spelling and the same PRNG state, snapping altered **0** of them. That is the
+point — it does not move the split, it only makes the split exact, so the
+sampled distribution is untouched (the fractional part `r = μ − s` is still
+computed in floating point, and Lemma 2 says the sampler is insensitive to
+perturbations that do not cross the split).
+
+Compared with §7.1 this is strictly easier to deploy:
+
+| | 2024/1709 §7.1 | rational snapping |
+|:--|:--|:--|
+| sampler change | replace `SamplerZ` with Algorithm 4 | 3 lines at 4 of 1024 calls |
+| key-generation change | **required** (odd `‖(g,−f)‖²`) — impossible on the reference generator | none |
+| output distribution | new base sampler, new proof obligation | unchanged (0 of 1200 signatures moved) |
+| effect on the deployable path | key recovery still succeeds (§7.1 iv) | all known divergences removed |
+
+Two honest caveats. First, the 10⁻⁹ margin is measured, not proved; a rigorous
+forward-error bound on the centre computation would be needed before a standard
+could rely on it, and that bound is exactly the kind of thing FIPS 206 should
+state anyway. Second, snapping is only available where `g` is both known and
+below the floating-point precision — the first six and last six calls; in the
+interior `g ≳ q³` exceeds `2⁵³`, but there an integer centre occurs with
+probability below 10⁻¹⁶ and §6.2 measured zero in 1.02×10⁸ draws, so those
+positions do not need protecting.
+
 ---
 
 ## 8. The constants
@@ -1056,6 +1116,7 @@ runs unless a measurement asks otherwise.
 | countermeasure, rate (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_eval.jl rate A1 100 1500 1 out.txt` |
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
 | **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
+| **the replacement countermeasure** (§7.2) | `julia --project=falcon falcon/scripts/snapping.jl` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
