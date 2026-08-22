@@ -207,7 +207,7 @@
 <header class="mast">
   <span class="eyebrow">FALCON / FN-DSA · implementation study</span>
   <h1>Two Faithful Falcons</h1>
-  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. We measured how often, broke the proposed fix, and built a better one.</p>
+  <p class="sub">Two implementations can both follow the specification and still sign the same message differently. We measured how often, showed the proposed fix only half-works, and sketched a simpler one.</p>
   <div class="meta">
     <span><b>Independent implementation</b> · Julia, from the spec</span>
     <span><b>Reference</b> · round-3 v1.2 C &amp; Python</span>
@@ -228,8 +228,8 @@
   </div>
   <div class="stat">
     <div class="k">Proposed countermeasure</div>
-    <div class="v sig">broken</div>
-    <div class="d">With ePrint 2024/1709 §7.1 deployed as an implementer can deploy it, we still recover keys — 3 of 3.</div>
+    <div class="v sig">half-useless</div>
+    <div class="d">Part 1 of ePrint 2024/1709 §7.1 immunises only the harmless positions; with it deployed we still recover keys, 3 of 3.</div>
   </div>
   <div class="stat">
     <div class="k">Verification speed</div>
@@ -432,13 +432,13 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 
 
 <span class="secnum">05 — Break &amp; fix</span>
-<h2>We break the proposed countermeasure — then replace it</h2>
+<h2>Half a countermeasure protects nothing — and a simpler alternative</h2>
 
 <p>ePrint 2024/1709 §7.1 proposes the structural fix in two parts: (1) replace <span class="mono">SamplerZ</span> with a <em>rounding</em> sampler (Algorithm 4), moving the instability from integers to half-integers; and (2) force <span class="mono">‖(g,−f)‖²</span> <strong>odd</strong>, which makes half-integer centres impossible. We implemented it. The χ² test over 200k samples at five (μ,σ) pairs gives χ²/df of 0.72–1.02, so Algorithm 4 is distributionally sound — an independent confirmation.</p>
 
 <div class="note">
-<span class="eyebrow">The break</span>
-Part 2 is <strong>impossible on the reference key generator</strong>, which forces the coefficient sums of both <span class="mono">f</span> and <span class="mono">g</span> odd, so their sum is even — 0 odd keys in 3200 generated. So part 1 is what ships. And a centre <span class="mono">n/g</span> is a half-integer only when <span class="mono">g</span> is <strong>even</strong>. At the first two calls <span class="mono">g = q = 12289</span> is <strong>odd</strong> → rounding immunises them completely. At the last two <span class="mono">g = ‖(g,−f)‖²</span> is <strong>even</strong> → rounding immunises nothing. And the first two are the <em>harmless</em> positions; the last two are full key recovery.
+<span class="eyebrow">The asymmetry</span>
+The reference key generator never produces an odd <span class="mono">‖(g,−f)‖²</span>, because it forces the coefficient sums of <em>both</em> <span class="mono">f</span> and <span class="mono">g</span> odd, so their sum is even. Part 2 is nonetheless <strong>deployable</strong> — relaxing one parity gives odd norms 40 of 40 (we measured it) — but it is a <em>second</em> change, and an implementer who touches only the sampler makes only the first. And a centre <span class="mono">n/g</span> is a half-integer only when <span class="mono">g</span> is <strong>even</strong>. At the first two calls <span class="mono">g = q = 12289</span> is <strong>odd</strong> → rounding immunises them completely. At the last two <span class="mono">g = ‖(g,−f)‖²</span> is <strong>even</strong> → rounding immunises nothing. And the first two are the <em>harmless</em> positions; the last two are full key recovery.
 </div>
 
 <div class="tbl-wrap">
@@ -452,7 +452,7 @@ Part 2 is <strong>impossible on the reference key generator</strong>, which forc
 </div>
 <figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;">100,000 samples per end. Under <span class="mono">floor</span>, 7 of 12 exposures sit at the dangerous end; under <span class="mono">round</span> without the key-generation change, <strong>all 11 do</strong>.</figcaption>
 
-<p>So we ran the whole attack <em>through</em> the countermeasure. Over 160,000 signatures with Algorithm 4 deployed on reference keys: 29 near-half-integer centres, 3 divergent pairs, and <strong>3 of 3 private keys recovered</strong> — each verified as exactly the stored key up to the NTRU lattice's symmetries.</p>
+<p>So we ran the whole attack with part 1 deployed. Over 160,000 signatures on reference keys: 29 near-half-integer centres, 3 divergent pairs, and <strong>3 of 3 private keys recovered</strong> — each verified as exactly the stored key up to the NTRU lattice's symmetries. <em>Disclosure:</em> the perturbation source here is arm A1, which the paper's <em>other</em> countermeasure (§7.2, aligning the two signing modes) removes; our own A2 arm survives that but is too rare to have been observed under the rounding sampler. The experiment establishes the mechanism, not a break of the countermeasure as a whole.</p>
 <pre><span class="cm"># scripts/countermeasure_break.jl</span>
 DIVERGENCE key 20 sig  562 : 909/1024 differ
    <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^256 (f,g)
@@ -463,7 +463,7 @@ DIVERGENCE key 82 sig 1054 : 936/1024 differ
 
 rate with the countermeasure : 3/160000 = 1.9e-5
 rate without it              : 10/525000 = 1.9e-5   <span class="cm"># unchanged</span></pre>
-<p>The mathematics of the <em>full</em> countermeasure is sound — with <span class="mono">t</span> odd, <span class="mono">m₂</span> and <span class="mono">m₃</span> are odd too and half-integer centres cannot occur anywhere. What breaks is its <strong>deployability</strong>.</p>
+<p>The <em>full</em> countermeasure is sound and deployable — with <span class="mono">t</span> odd, <span class="mono">m₂</span> and <span class="mono">m₃</span> are odd too and half-integer centres cannot occur anywhere. The normative point is that its two parts are <strong>not independently useful</strong>: a standard adopting the rounding sampler must mandate the key-generation parity change in the same clause and say that neither part alone suffices.</p>
 
 <h3>The replacement: snap the centre to its exact rational</h3>
 <p>At the sensitive positions the exact centre is <span class="mono">n/g</span> and the <em>signer already knows</em> <span class="mono">g</span>. The FP centre approximates it to ~10⁻¹³, so <span class="mono">g·μ̂</span> lands within ~1.6×10⁻⁹ of the integer <span class="mono">n</span> — seven orders of margin against the 0.5 that would break it (measured max residual: 1.4×10⁻⁹ and 2.4×10⁻⁸ over 100k samples each). So <span class="mono">n = round(g·μ̂)</span> is exact, and <span class="mono">s = fld(n, g)</span> is pure integer arithmetic.</p>
@@ -479,13 +479,13 @@ sanity: snapping changed 0 of 1200 ordinary signatures</pre>
 <thead><tr><th></th><th>2024/1709 §7.1</th><th>rational snapping</th></tr></thead>
 <tbody>
 <tr><td>sampler change</td><td>replace with Algorithm 4</td><td>3 lines at 4 of 1024 calls</td></tr>
-<tr class="hl"><td>key-generation change</td><td class="lose">required — impossible on the reference generator</td><td class="win">none</td></tr>
+<tr class="hl"><td>key-generation change</td><td class="lose">required — a second change, easy to omit</td><td class="win">none</td></tr>
 <tr><td>output distribution</td><td>new base sampler, new proof obligation</td><td>unchanged (0 of 1200 moved)</td></tr>
-<tr><td>on the deployable path</td><td class="lose">key recovery still succeeds</td><td class="win">all known divergences removed</td></tr>
+<tr><td>if only the sampler is changed</td><td class="lose">key recovery still succeeds</td><td class="win">n/a — single change</td></tr>
 </tbody>
 </table>
 </div>
-<p>Two honest caveats: the 10⁻⁹ margin is <em>measured, not proved</em> — a standard relying on it should state a forward-error bound — and snapping applies only where <span class="mono">g</span> is known and below 2⁵³ (the first and last six calls; the interior needs no protection, with 0 integer centres in 1.02×10⁸ draws).</p>
+<p>Four honest caveats: the 10⁻⁹ margin is <em>measured, not proved</em>; snapping applies only where <span class="mono">g</span> is known and below 2⁵³; the "0 of 1200" check has almost no power (≈0.3 changes were expected), so no distributional test has really been done; and our implementation allocates, is not constant-time, and admits <span class="mono">r</span> outside [0,1). We present snapping as a promising direction, not a finished countermeasure.</p>
 
 <span class="secnum">06 — Performance</span>
 <h2>How fast, against what</h2>

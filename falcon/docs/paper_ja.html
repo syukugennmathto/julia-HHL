@@ -135,7 +135,7 @@
 <header class="mast">
   <span class="eyebrow">FALCON / FN-DSA · 実装研究</span>
   <h1>忠実な二羽のFALCON</h1>
-  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。頻度を測り、提案された対策を破り、より良い対策を作った。</p>
+  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。頻度を測り、提案された対策が半分では効かないことを示し、より簡単な代替を示した。</p>
   <div class="meta">
     <span><b>独立実装</b> · Julia、仕様書から</span>
     <span><b>参照実装</b> · round-3 v1.2 の C と Python</span>
@@ -154,8 +154,8 @@
   </div>
   <div class="stat">
     <div class="k">提案された対策</div>
-    <div class="v sig">破れた</div>
-    <div class="d">ePrint 2024/1709 §7.1 を実装者が配備できる形で入れても、鍵は取れる ― 3/3。</div>
+    <div class="v sig">半分は無効</div>
+    <div class="d">§7.1 の part 1 は無害な位置しか免疫しない。入れた状態で鍵は取れる ― 3/3。</div>
   </div>
   <div class="stat">
     <div class="k">検証の速さ</div>
@@ -344,13 +344,13 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 
 
 <span class="secnum">05 — 破って、直す</span>
-<h2>提案された対策を破り、置き換える</h2>
+<h2>対策の半分では何も守れない ― そして、より簡単な代替</h2>
 
 <p>ePrint 2024/1709 §7.1 の対策は2部構成：(1) <span class="mono">SamplerZ</span> を<em>四捨五入</em>版（Algorithm 4）に置換し、不安定点を整数から半整数へ移す。(2) <span class="mono">‖(g,−f)‖²</span> を<strong>奇数</strong>に制限し、半整数中心を不可能にする。実装した。5 つの (μ,σ) で各 20 万標本の χ² は χ²/df = 0.72〜1.02 ― Algorithm 4 は分布的に健全（独立確認）。</p>
 
 <div class="note">
-<span class="eyebrow">破れた点</span>
-part 2 は<strong>参照実装の鍵生成では不可能</strong>（f と g の<em>両方</em>の係数和を奇数に強制 → 和は偶数。3200 鍵中 奇数は 0）。よって配備されるのは part 1 のみ。そして中心 <span class="mono">n/g</span> が半整数になるのは <span class="mono">g</span> が<strong>偶数</strong>のときだけ。最初の2回は <span class="mono">g = q = 12289</span> ＝<strong>奇数</strong> → 完全免疫。最後の2回は <span class="mono">g = ‖(g,−f)‖²</span> ＝<strong>偶数</strong> → 全く免疫しない。しかも最初の2回は<em>無害</em>な位置、最後の2回は鍵の全復元位置。
+<span class="eyebrow">非対称性</span>
+参照実装の鍵生成は奇数ノルムを作らない（f と g の<em>両方</em>の係数和を奇数に強制 → 和は偶数）。ただし part 2 は<strong>配備可能</strong>である ― 片方の parity を緩めれば奇数ノルムが 40/40 で得られる（実測）。問題は<em>二つめ</em>の変更である点で、サンプラだけ触る実装者は最初の変更しかしない。そして中心 <span class="mono">n/g</span> が半整数になるのは <span class="mono">g</span> が<strong>偶数</strong>のときだけ。最初の2回は <span class="mono">g = q = 12289</span> ＝<strong>奇数</strong> → 完全免疫。最後の2回は <span class="mono">g = ‖(g,−f)‖²</span> ＝<strong>偶数</strong> → 全く免疫しない。しかも最初の2回は<em>無害</em>な位置、最後の2回は鍵の全復元位置。
 </div>
 
 <div class="tbl-wrap">
@@ -364,7 +364,7 @@ part 2 は<strong>参照実装の鍵生成では不可能</strong>（f と g の
 </div>
 <figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;">各端 10 万標本。<span class="mono">floor</span> では 12 件中 7 件が危険端。<span class="mono">round</span>（鍵生成を変えず）では<strong>11 件すべて</strong>が危険端。</figcaption>
 
-<p>そこで対策を<em>入れたまま</em>攻撃を通した。参照鍵に Algorithm 4 を配備、16 万署名：半整数近傍中心 29 件、発散 3 件、そして<strong>3/3 で秘密鍵を復元</strong> ― いずれも格子対称を除いて厳密に格納鍵と一致。</p>
+<p>part 1 を入れた状態で攻撃を通した。参照鍵で 16 万署名：半整数近傍中心 29 件、発散 3 件、<strong>3/3 で秘密鍵を復元</strong> ― 格子対称を除いて厳密に一致。<em>開示:</em> ここで使った摂動源は A1 腕で、それは同論文の<em>もう一つの</em>対策（§7.2）が消す源である。こちらの A2 腕は §7.2 を生き延びるが、丸めサンプラ下では稀すぎて未観測。この実験が示すのは機構であって、対策全体の突破ではない。</p>
 <pre><span class="cm"># scripts/countermeasure_break.jl</span>
 DIVERGENCE key 20 sig  562 : 909/1024 相違
    <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^256 (f,g)
@@ -375,7 +375,7 @@ DIVERGENCE key 82 sig 1054 : 936/1024 相違
 
 対策あり : 3/160000 = 1.9e-5
 対策なし : 10/525000 = 1.9e-5   <span class="cm"># 変わらない</span></pre>
-<p><em>完全な</em>対策の数学は健全（t 奇数なら m₂, m₃ も奇数で半整数中心はどこにも存在しない）。破れたのは数学ではなく<strong>配備可能性</strong>。</p>
+<p><em>完全な</em>対策は健全かつ配備可能（t 奇数なら m₂, m₃ も奇数）。規範的な要点は、2 つの部分が<strong>単独では役に立たない</strong>こと ― 丸めサンプラを採る標準は、鍵生成の parity 変更を同じ条項で義務づけ、片方だけでは不十分だと明記する必要がある。</p>
 
 <h3>置き換え：中心を厳密な有理数にスナップする</h3>
 <p>敏感位置では厳密な中心が <span class="mono">n/g</span> で、<em>分母 g は署名者が既に知っている</em>。浮動小数点の中心は ~10⁻¹³ の精度なので <span class="mono">g·μ̂</span> は整数 <span class="mono">n</span> から ~1.6×10⁻⁹ 以内 ― 破るのに必要な 0.5 に対して<strong>7 桁の余裕</strong>（実測最大残差 1.4×10⁻⁹ と 2.4×10⁻⁸、各 10 万標本）。よって <span class="mono">n = round(g·μ̂)</span> は厳密、<span class="mono">s = fld(n, g)</span> は純整数演算。</p>
@@ -391,13 +391,13 @@ A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good
 <thead><tr><th></th><th>2024/1709 §7.1</th><th>rational snapping</th></tr></thead>
 <tbody>
 <tr><td>サンプラ変更</td><td>Algorithm 4 に置換</td><td>1024 回中 4 回で 3 行</td></tr>
-<tr class="hl"><td>鍵生成の変更</td><td class="lose">必須 — 参照実装では不可能</td><td class="win">不要</td></tr>
+<tr class="hl"><td>鍵生成の変更</td><td class="lose">必須 — 見落としやすい第二の変更</td><td class="win">不要</td></tr>
 <tr><td>出力分布</td><td>新 base sampler・新たな証明義務</td><td>不変（1200 本中 0 本）</td></tr>
-<tr><td>配備経路での効果</td><td class="lose">鍵復元が成功したまま</td><td class="win">既知の発散が全消滅</td></tr>
+<tr><td>サンプラだけ変えた場合</td><td class="lose">鍵復元が成功したまま</td><td class="win">該当なし（変更は1つ）</td></tr>
 </tbody>
 </table>
 </div>
-<p>正直な限界を2つ：10⁻⁹ の余裕は<em>実測であって証明ではない</em>（標準が依拠するなら前進誤差の上界を書くべき）。また snapping が使えるのは g が既知かつ 2⁵³ 未満の位置＝最初と最後の 6 回（内部は守る必要がない ― 1.02×10⁸ ドローで整数中心 0 件）。</p>
+<p>正直な限界を4つ：10⁻⁹ の余裕は<em>実測であって証明ではない</em>。使えるのは g が既知かつ 2⁵³ 未満の位置のみ。「1200 本中 0 本」の健全性検査は<em>検出力がほぼ無い</em>（期待変化数 ≈0.3）ので分布検定は実質未実施。実装は確保を伴い定数時間でなく、r が [0,1) を外れる場合がある。<strong>有望な方向であって、完成した対策ではない。</strong></p>
 
 <span class="secnum">06 — 性能</span>
 <h2>どれくらい速いか、何に対して</h2>

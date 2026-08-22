@@ -32,21 +32,22 @@ between the *specification* and the *reference*, present in both of the
 reference's signing modes, and not removed by its `sign_dyn`/`sign_tree`
 countermeasure. We reproduce that paper's mechanism independently, check its
 Heuristic 1 directly (which it does not), confirm the effect at n = 1024, and
-**explain the asymmetry it left open** — why the last two sampler calls diverge
-far more readily than the first two — as a perturbation that accumulates along
-the tree descent, 32× larger at the last two calls than the first two. We also
-implement and evaluate that paper's own proposed countermeasure, and **break the
-half of it that an implementer can actually deploy today**: because the
-reference key generator cannot produce the odd `‖(g,−f)‖²` the second half
-requires, only the rounding sampler ships — and since `q = 12289` is odd while
-`‖(g,−f)‖²` is always even, rounding immunises exactly the *harmless* sampler
-positions and leaves every full-key-recovery position exposed. With that
-countermeasure in place we still recover the private key, from 3 of 3 divergent
-pairs found in 160000 signatures, at an unchanged rate of 1.9 × 10⁻⁵. We then
-propose a repair that needs no key-generation change — snapping the centre to
-its exact rational value, which the signer can do because it knows the
-denominator — and show it removes every divergence we have found while leaving
-1200 ordinary signatures bit-identical. Performance: this
+offer a **mechanism for the asymmetry it left open** — why the last two sampler
+calls diverge far more readily than the first two — as a perturbation that
+accumulates along the tree descent and is 32× larger at the last two calls
+(§12.3 states what that mechanism does and does not settle). We also
+implement and evaluate that paper's own proposed countermeasure. It is a
+two-part fix — round instead of floor, *and* force `‖(g,−f)‖²` odd — and we find
+that **part 1 alone, the change an implementer makes if they touch only the
+sampler, gives no protection where it matters**: `q = 12289` is odd, so rounding
+immunises the first two sampler calls completely, while `‖(g,−f)‖²` is even on
+every reference key, so it immunises the last two — the full-key-recovery
+positions — not at all. With part 1 deployed we still recover keys, 3 of 3
+divergent pairs in 160000 signatures. Part 2 *is* deployable (we show a
+one-line key-generation change yields odd norms, 40 of 40), so the two parts
+must be mandated together and a standard must say so. We also give a simpler
+alternative that needs no key-generation change: snapping the centre to its
+exact rational value, which the signer can do because it knows the denominator. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -163,15 +164,14 @@ for this particular question.
    Antrag and HAWK, the sensitivity requires both floating point in the signing
    sampler and a small-denominator rational centre — Falcon alone has both, so
    the hazard is specific to its design, not generic to lattice hash-and-sign.
-7. **A break of the deployable countermeasure** (§7.1): we implement ePrint
-   2024/1709's Algorithm 4, confirm it is distributionally sound (χ²), verify
-   the rational structure of the centres directly, and then recover private keys
-   *with the countermeasure running* — 3 of 3 divergent pairs, at an unchanged
-   1.9 × 10⁻⁵ — because `q` is odd while the reference's `‖(g,−f)‖²` is always
-   even, so rounding immunises only the harmless positions. We then give a
-   replacement countermeasure (§7.2) that requires no key-generation change,
-   uses exact integer arithmetic with seven orders of margin, removes every
-   divergence found, and leaves ordinary signatures unchanged.
+7. **An evaluation of the proposed countermeasure** (§7.1): we implement ePrint
+   2024/1709's Algorithm 4, verify the rational structure of the centres
+   directly, and show that its *first part alone* immunises only the harmless
+   sampler positions — recovering keys, 3 of 3, with that part deployed. We also
+   show its second part is deployable (contrary to what the reference key
+   generator suggests), so the normative point is that the two must be mandated
+   **together**. §7.2 gives a simpler alternative requiring no key-generation
+   change.
 
 We are equally explicit about what is **not** a contribution. The arithmetic
 mechanism (an integer centre passing through `floor`), the fact that the
@@ -516,7 +516,7 @@ reproducing the idiosyncrasy that §7.1 of that paper attributes to the C
 reference's key generation (and which blocks its own countermeasure), from an
 implementation that followed the C key generation without knowing it mattered.
 
-### 6.3 Why the last two calls dominate — resolving an open question of 2024/1709
+### 6.3 Why the last two calls dominate — a mechanism for an open question of 2024/1709
 
 Section 6.1 of ePrint 2024/1709 reports, and states it does "not fully
 understand," that conditional on an integer centre the **last** two calls
@@ -593,7 +593,7 @@ a divergence-rate ratio, and it is consistent both with our 0-of-10 and with
 first two calls. It also means a chosen-message adversary gains nothing at the
 first two positions — the only exploitable end is the last two.
 
-### 6.7 The first two centres are a public linear form in the secret
+### 6.4 The first two centres are a public linear form in the secret
 
 One structural fact underlies both Heuristic 1's first-two case and a different
 attack shape. In `sample_preimage` the second target component is
@@ -608,16 +608,20 @@ call 1 : mu = 41.9012124664   (c*f)[256]/q = 41.9012124664   |diff| = 0
 call 2 : mu =  8.6159166734   (c*f)[512]/q =  8.6159166734   |diff| = 2.5e-14
 ```
 
-Two consequences. First, **Heuristic 1 becomes a theorem at these two
-positions.** Remark 1 of ePrint 2024/1709 explains why the heuristic cannot be
-made a theorem in general; here it can, because the denominator is exactly `q`
-and the numerator is an explicit integer, so "integer centre" is exactly the
-condition `(c·f)_{n/2−1} ≡ 0 (mod q)`.
+Two consequences. First, the *event* is exactly characterised at these two positions: "integer
+centre" is precisely `(c·f)_{n/2−1} ≡ 0 (mod q)`, with no heuristic involved,
+because the denominator is exactly `q` and the numerator is an explicit integer.
+Turning that into Heuristic 1's *probability* `1/q` needs, in addition, that
+`(c·f) mod q` be uniform over the random oracle's output and that `f` be
+invertible mod `q`; we do not prove either, so we claim the characterisation of
+the event, not a theorem replacing the heuristic.
 
 Second, that condition is **linear in the secret, with public coefficients**.
-Each *detected* integer-centre event yields one equation `⟨c, x^{n/2}f⟩ ≡ 0
-(mod q)`; `n` independent events determine `f mod q`, and since `‖f‖ ≪ q` that
-determines `f`. This is a different shape from §5.1, which reads the key out of
+Each *detected* integer-centre event yields one linear equation on `f mod q`:
+writing the coefficient of `x^k` in `c·f` over `Z[x]/(x^n+1)` as `⟨c, x^k f*⟩`
+with `f*` the adjoint (`f*(x) = f(x^{-1})`), the condition at call 1 is
+`⟨c, x^{n/2−1} f*⟩ ≡ 0 (mod q)`. `n` independent events determine `f mod q`, and
+since `‖f‖ ≪ q` that determines `f`. This is a different shape from §5.1, which reads the key out of
 the difference *vector* of two signatures — here the leak is the *event*, and no
 difference vector is needed. It applies at the first two calls, the positions
 2024/1709 dismisses as yielding only a short lattice vector.
@@ -629,7 +633,7 @@ manufactured 10 integer centres there with zero straddles. A larger perturbation
 source (FMA), a conformance-mismatch report, or a side channel would. We state
 the shape and its requirement; we do not claim a working attack on plain Falcon.
 
-### 6.4 Two directions that did not pan out (recorded honestly)
+### 6.5 Two directions that did not pan out (recorded honestly)
 
 Two hypotheses we tested and rejected, since the boundary they probe is part of
 the result. **A weak-key class by `‖(g,−f)‖²`**: the last-two rate is
@@ -679,8 +683,8 @@ contribution.
 | hand-unrolled difference (Class I c) | identified §6.1, countermeasure §7.2 | reproduced as positive control (A1) |
 | complex division, `D11` (Class I a,b) | **not present** | **7.5 × 10⁻⁶ at the key-recovery position; not fixed by §7.2** |
 | Heuristic 1 | consequence measured | **cause measured directly (§6.2)** |
-| last-two-vs-first-two asymmetry | observed, "not fully understood" (§6.1) | **explained: depth-accumulated `l10` perturbation, 32× (§6.3)** |
-| key recovery | described (§5) | **run on our own A2 pair (§6.1)** |
+| last-two-vs-first-two asymmetry | observed, "not fully understood" (§6.1) | **mechanism given: depth-accumulated `l10` perturbation, 32× (§6.3); not calibrated (§12.3)** |
+| key recovery | described (§5) | **run on our own A2 pair (§6.1)**, and on a pair produced with part 1 of the §7.1 countermeasure deployed (§7.1 iv, arm A1) |
 | even `‖(g,−f)‖²` (§7.1) | noted as a C idiosyncrasy | reproduced independently |
 
 The one genuinely new empirical fact is the A2 arm. Its significance is not that
@@ -758,14 +762,26 @@ end; under `round` without the key-generation change, **all 11 do**. The
 countermeasure does not reduce key-recovery exposure; it concentrates what
 remains onto the positions that matter.
 
-**(iv) The countermeasure, as deployable, does not prevent key recovery.** We
-ran the whole attack against it (`scripts/countermeasure_break.jl`): sign with
+**(iv) With part 1 alone deployed, key recovery still succeeds.** We ran the
+whole attack against it (`scripts/countermeasure_break.jl`): sign with
 `NewSamplerZ` on reference keys, look for a half-integer straddle at the last
 two calls, and when one occurs run §5.1's recovery. Over 160000 signatures, 29
 centres came within 10⁻¹² of a half-integer, **3 produced divergent signature
 pairs, and all 3 yielded the private key** — each verified to be exactly the
 stored key up to the NTRU lattice's symmetries (`x²⁵⁶(f,g)`, `x⁰(f,g)`,
-`−x²⁵⁶(f,g)`):
+`−x²⁵⁶(f,g)`).
+
+**Disclosure, because it materially qualifies this result:** the perturbation
+source used here is arm **A1** (the hand-unrolled bottom levels), which is the
+`sign_dyn`/`sign_tree` difference that the *other* countermeasure of that paper,
+§7.2, removes. So the configuration demonstrated is "deploy half of §7.1, do not
+deploy §7.2, and attack with the source §7.2 kills" — not a configuration an
+implementer following that paper would be in. Our own arm A2 survives §7.2, but
+has never been observed under `NewSamplerZ`: its expected count in 160000
+signatures is ≈1.2, so demonstrating it would take of order 10⁶ signatures,
+which we have not run. What the experiment does establish is the mechanism —
+that rounding leaves the last-two exposure intact — not a break of the
+countermeasure as a whole.
 
 ```
 DIVERGENCE key 20 sig  562 : 909 of 1024 coefficients differ
@@ -779,7 +795,27 @@ DIVERGENCE key 82 sig 1054 : 936 of 1024 coefficients differ
 The end-to-end rate is unchanged: 3 in 160000 (1.9×10⁻⁵) with the countermeasure
 deployed, against the `floor` baseline's 10 in 525000 (1.9×10⁻⁵).
 
-**The full countermeasure is sound; it is the deployable half that is not.**
+**(v) Part 2 is deployable, so the point is that both parts must be mandated
+together.** An earlier version of this work claimed part 2 was unavailable,
+on the strength of observing 0 odd-norm keys in 3200. That was an argument from
+absence, and it was wrong. The reason the reference never produces one is exact:
+`gen_poly_cdt` forces the coefficient sum of **both** `f` and `g` odd (so that
+`Res(f, x^n+1)` is odd and the binary GCD at the bottom of the Pornin–Prest
+descent does not fail on a factor of 2), whence
+`‖(g,−f)‖² = Σg_i² + Σf_i² ≡ g(1) + f(1) ≡ 0 (mod 2)` in one line. But
+2024/1709 says only *one* of the two needs to be odd, and that is correct: with
+`f` odd and `g` even (`scripts/odd_norm_keygen.jl`) the solver succeeds **40 of
+40** and every resulting key has an odd norm, against 0 of 40 in the control.
+Their "easily fixable" stands.
+
+The normative consequence is therefore not that the countermeasure fails, but
+that **its two parts are not independently useful**. The sampler change is the
+obvious one and the key-generation parity change is easy to overlook; an
+implementer who makes only the first gets, by the parity argument above, no
+protection at exactly the positions that leak the key. A standard adopting
+Algorithm 4 must mandate the key-generation change in the same clause and say
+explicitly that neither part alone suffices.
+
 With `t = ‖(g,−f)‖²` odd,
 `m₂ = t² − 2u²` and `m₃ = t³ − 2t(u²+v²+w²) + 2u(v−w)²` are odd as well
 (odd − even = odd), so all six in-precision denominators are odd and half-integer
@@ -820,28 +856,44 @@ A1 key  4 sig  105   off: 455 of 512 differ  DIVERGE   on: 0  AGREE
 
 And it changes nothing else: over 1200 ordinary signatures with the same
 spelling and the same PRNG state, snapping altered **0** of them. That is the
-point — it does not move the split, it only makes the split exact, so the
-sampled distribution is untouched (the fractional part `r = μ − s` is still
-computed in floating point, and Lemma 2 says the sampler is insensitive to
-perturbations that do not cross the split).
+point — it does not move the split, it only makes the split exact. The
+fractional part `r = μ − s` is still computed in floating point; what Lemma 1
+establishes is that the sampler is sensitive *only* at the discontinuity, so a
+perturbation of `r` that does not cross it changes the execution with
+probability of order that perturbation. (An earlier draft cited Lemma 2 here;
+Lemma 2 is about the standard deviation, and the relevant statement is the
+continuous half of Lemma 1.)
 
-Compared with §7.1 this is strictly easier to deploy:
+Compared with §7.1 this is a single change rather than two that must be adopted
+together — which, given that §7.1's two parts are not independently useful, is
+the practical difference:
 
 | | 2024/1709 §7.1 | rational snapping |
 |:--|:--|:--|
 | sampler change | replace `SamplerZ` with Algorithm 4 | 3 lines at 4 of 1024 calls |
-| key-generation change | **required** (odd `‖(g,−f)‖²`) — impossible on the reference generator | none |
+| key-generation change | **required** (odd `‖(g,−f)‖²`); deployable, but a second change an implementer must not omit | none |
 | output distribution | new base sampler, new proof obligation | unchanged (0 of 1200 signatures moved) |
 | effect on the deployable path | key recovery still succeeds (§7.1 iv) | all known divergences removed |
 
-Two honest caveats. First, the 10⁻⁹ margin is measured, not proved; a rigorous
-forward-error bound on the centre computation would be needed before a standard
-could rely on it, and that bound is exactly the kind of thing FIPS 206 should
-state anyway. Second, snapping is only available where `g` is both known and
-below the floating-point precision — the first six and last six calls; in the
-interior `g ≳ q³` exceeds `2⁵³`, but there an integer centre occurs with
+Four honest caveats, all of which a standards body would have to see closed
+before adopting this. First, the 10⁻⁹ margin is **measured, not proved**; a
+rigorous forward-error bound on the centre computation is needed before a
+standard could rely on it. Second, snapping is only available where `g` is both
+known and below the floating-point precision — the first six and last six calls;
+in the interior `g ≳ q³` exceeds `2⁵³`, but there an integer centre occurs with
 probability below 10⁻¹⁶ and §6.2 measured zero in 1.02×10⁸ draws, so those
-positions do not need protecting.
+positions do not need protecting. Third, the "0 of 1200 signatures moved" check
+has **almost no statistical power**: with near-integer densities of ≈8×10⁻⁵ and
+≈6×10⁻⁵ at four snapped positions, the expected number of changes in 1200
+signatures is ≈0.3, so the observation confirms only that snapping is a no-op
+away from a boundary, which holds by construction. A distributional test with
+the power of the χ² we ran for Algorithm 4 has not been done. Fourth, our
+implementation (`fld(round(Int128, big(g)*mu), big(g))`) allocates and is not
+constant-time, and snapping with `floor` admits `r = μ − s` outside `[0,1)` when
+`μ̂` falls just below the true integer centre; a deployable version needs a
+constant-time, allocation-free formulation and a statement of what `BerExp` does
+with a negative `r`. We present snapping as a promising direction, not a
+finished countermeasure.
 
 ### 7.3 The floating-point environment: a determinism failure the specification never mentions
 
@@ -1117,11 +1169,29 @@ general lattice-signature guideline.
 2. **A2 and A1 rates are not distinguished.** They differ by a point factor of
    2.5 but not significantly (p ≈ 0.23 over 925000 pooled signatures); both are
    order 10⁻⁵. We report this as "comparable," not as an ordering.
-3. **The §6.1 asymmetry is unexplained.** ePrint 2024/1709 reports, and we do
-   not resolve, that conditional on an integer centre the last two calls diverge
-   more readily than the first two, specifically for the `sign_dyn`/`sign_tree`
-   difference. Our determinism observation (§6.1) is a candidate mechanism but
-   not the conditional probability they ask about.
+3. **The asymmetry explanation is a mechanism, not a calibrated model.** §6.3
+   measures the perturbation magnitude `|Δμ|` per position (32× larger at the
+   last two calls) and §6.3's follow-up converts it to a straddle probability
+   `≈ |Δμ|/spread`. Those two give ratios of 32× and 5–10× respectively, and
+   2024/1709's Table 2 30/70 split implies ≈3× after correcting for the density
+   difference — three numbers spanning a factor of ten, which we call consistent
+   in direction but have not reconciled quantitatively. The only direct test of
+   the conditional probability at the first two calls is 0 of 10 manufactured
+   integer centres, which cannot distinguish `P = 0.1` from `P = 0`. The
+   mechanism (perturbation accumulating through the `l10` correction) we regard
+   as established; the quantitative law we do not.
+4. **Our measured rates are last-two-only.** `divergence_rate.jl` and
+   `divergence_accum.jl` hold the message fixed, and §6.2 shows the first-two
+   centres do not depend on the signing randomness, so across 525000 A1
+   signatures there are only 100 independent first-two centres. The A1 rate we
+   report is therefore not directly comparable to 2024/1709's Table 2, which
+   includes first-two events; the comparison in §6 should be read with that
+   caveat.
+5. **A withdrawn claim.** An earlier version of this work stated that part 2 of
+   the §7.1 countermeasure was undeployable, from 0 odd-norm keys in 3200. That
+   was an argument from absence and it was wrong; §7.1(v) reports the
+   measurement that refutes it. The corrected claim is narrower and is the one
+   made here.
 4. **One machine.** The performance spread is across compilers and optimization
    levels, not hardware.
 5. **FALCON-1024** is measured at lower volume (350000 signatures, one event);
@@ -1198,7 +1268,7 @@ runs unless a measurement asks otherwise.
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
 | **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
 | **the replacement countermeasure** (§7.2) | `julia --project=falcon falcon/scripts/snapping.jl` |
-| centres as a linear form in f (§6.7) | `julia --project=falcon falcon/scripts/linear_form.jl` |
+| centres as a linear form in f (§6.4) | `julia --project=falcon falcon/scripts/linear_form.jl` |
 | rounding mode changes every signature (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
 | the attack-family ceiling (§7.3) | `julia --project=falcon falcon/scripts/rounding_attack.jl 20 2400 1022` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
