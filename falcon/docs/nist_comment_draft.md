@@ -15,13 +15,17 @@
 - [ ] 節番号・アルゴリズム番号を IPD の実際の番号に差し替え
 - [ ] `docs/related_work_prompt.md` の調査を済ませ、既知の指摘でないことを確認
 - [ ] 再現用リポジトリを公開状態にする（現在は private branch）
+- [ ] §1 の縮約の結果を、**投稿環境とは別のマシン／別のコンパイラ版**でもう一度
+      走らせる（現在 x86-64・gcc 13.3 / clang 18.1 の 1 点のみ。aarch64 では
+      FMA が基本 ISA なので挙動が変わりうる ― 変わるなら §1 はもっと強くなる）
 
 ---
 
 ## 本文（英語・草案）
 
-Subject: FIPS 206 (FN-DSA) — two formulations the round-3 specification leaves
-open, which change the signature, plus two under-specified constants
+Subject: FIPS 206 (FN-DSA) — a build flag that changes the signature and gives
+up the private key, two formulations the specification leaves open, and two
+under-specified constants
 
 Dear NIST PQC team,
 
@@ -34,17 +38,114 @@ multiply-add, and require implementations to match KATs exactly, we think the
 following observations are relevant to the draft. All of them are reproducible
 from the artifact linked at the end.
 
-**Summary.** Two places where the specification's formulas and the reference's
-code are algebraically identical produce different intermediate values, and
-those differences reach the signature at a rate of about 7.5e-6, at the
-positions where ePrint 2024/1709 turns a discrepant pair into full key
-recovery. They are not the instance of that mechanism which that paper's
-section 6.1 identifies, and its section 7.2 countermeasure does not remove
-them. Two further items concern constants the specification does not let a
-reader derive. If the standard requires bit-exact agreement, all four need to
-be pinned in the text.
+**Summary.** The reference implementation itself, compiled two conforming ways,
+produces different signatures on about one message in ten thousand, and two
+thirds of those disagreements give up the private key. The difference is one
+optimization flag that C99 permits and the specification does not mention.
+Separately, two places where the specification's formulas and the reference's
+code are algebraically identical also reach the signature, at about 7.5e-6, and
+are not removed by the countermeasure of ePrint 2024/1709 section 7.2. Two
+further items concern constants the specification does not let a reader derive.
+If the standard requires bit-exact agreement, all of these need to be pinned in
+the text — the first one normatively and first.
 
-### 1. Two algebraically equal formulations that the text does not choose between
+### 1. `FP_CONTRACT` is not set, and it changes the signature
+
+C99 6.5p8 permits an implementation to contract `a*b + c` into a single fused
+multiply-add, with one rounding instead of two; `FP_CONTRACT` governs it. The
+reference sets neither the pragma nor a compiler flag, and neither the round-3
+specification nor the reference's `README.txt` mentions contraction. The
+September 2025 status update indicates FIPS 206 will forbid fused multiply-add;
+we are writing to say that the prohibition has to be normative and explicit,
+because of what we measured when it is absent.
+
+We built the reference three ways (`-DFALCON_FPNATIVE=1 -march=native`,
+everything else equal), generated one key from one seed, and signed 100000
+messages under a per-message deterministic PRNG tape:
+
+    clang -O2 -march=native -ffp-contract=fast : 143 fma instructions
+    clang -O2 -march=native                    :   0
+    gcc   -O2 -march=native                    :   0
+
+    gcc default == clang default : identical over 100000 signatures
+    clang -ffp-contract=fast vs clang default  : 12 of 100000 differ (1.2e-4)
+
+All three builds produce the identical private key from the identical seed, so
+the comparison is about signing alone. We then handed each of the twelve
+divergent pairs to the key recovery of ePrint 2024/1709 section 5.1, which sees
+only the two signatures, the public key and the message:
+
+    8 of 12 : private key recovered, each an exact NTRU symmetry +-x^k (f,g)
+              of the generated key, with ||(g,-f)||^2 = 16676 <= 1.17^2 q
+    4 of 12 : not recoverable by that route -- these are divergences at the
+              FIRST two sampler calls (see section 2 below)
+
+The result replicates at FALCON-1024 (6 of 60000).
+
+**The negative control matters as much.** Ordinary build choices do not
+diverge. Over 30000 signatures each, these eight are byte-identical to one
+another: `gcc -O2` native, `gcc -O2 -march=native`, `gcc` with the reference's
+AVX2 code path, `gcc -O2` emulated floating point, `gcc -march=native` emulated,
+`clang -O2` native, `clang` AVX2, `clang -O2` emulated. Only
+`-ffp-contract=fast` differs. Two compilers, native against emulated floating
+point, and the reference's separate AVX2 implementation of the FFT all agree
+bit for bit — so the hazard is one flag, not build variation in general. (We
+note in passing that the emulated build agreeing with the native one is itself
+worth recording, since `config.h` recommends emulation precisely because native
+FPUs "may yield slight discrepancies that could affect determinism".)
+
+**What is protecting the reference today is an accident.** The native build
+wraps `double` in `typedef struct { double v; } fpr;`, and `fpr.h` states the
+reason: so the compiler complains if raw arithmetic operators are used on the
+type. It has a second effect that is documented nowhere. GCC will not contract
+through the wrapper at any setting we tried, including its default
+`-ffp-contract=fast` and `-Ofast`; clang will, but only at
+`-ffp-contract=fast`, which `-Ofast` and `-ffast-math` both imply. A
+reimplementation that does not use the wrapper — which is most of them, since
+the wrapper is a C type-safety device with no analogue in many languages —
+loses that protection without any way to know it had it.
+
+**Suggestion.** State normatively that contraction must be disabled (`#pragma
+STDC FP_CONTRACT OFF`, or an equivalent prohibition expressed over the affected
+expressions), rather than leaving it to a build configuration. A prohibition on
+"using FMA" that an implementer reads as "do not call `fma()`" does not cover
+the case above, in which nobody wrote `fma` anywhere.
+
+### 2. The first two sampler calls are not harmless
+
+Four of the twelve divergent pairs above are not recoverable by section 5.1 of
+ePrint 2024/1709, because their difference is not 2-sparse in `z0`. They are
+divergences at the *first* two sampler calls, which that paper's section 5 sets
+aside: the resulting difference vector "is a short lattice vector, but it is not
+expected to be short enough to make key recovery feasible."
+
+That reasoning is about the difference vector, and there is a route at those
+positions that does not read it. In `sample_preimage` the second target
+component is `t1 = (-c_hat * b)/q` with `b = -f`, so as a ring element
+`t1 = (c*f)/q` exactly, where `c` is the public hashed message. The first two
+sampler centres are therefore coefficients of `(c*f)/q`, which we verified
+against exact `Int128` arithmetic. An integer centre at the first call is
+exactly the condition
+
+    (c*f)[n/2 - 1] = 0   (mod q)
+
+— one `F_q`-linear equation on the secret, with coefficients the adversary
+computes from the public message. We collected `n-1 = 511` such events and
+recovered the private key by Gaussian elimination over `F_q`: no difference
+vectors, no lattice reduction, 49 seconds. The kernel is one-dimensional and
+`||f|| << q`, so the lift is a scan over `q-1` scalars.
+
+**Suggestion.** This is not a request for a change to the algorithm; it is a
+request that the draft not justify a partial countermeasure by the harmlessness
+of the first two positions. In particular, if FIPS 206 adopts the rounding
+sampler of ePrint 2024/1709 section 7.1, it should mandate *both* parts of that
+countermeasure in the same clause: with `round` in place of `floor` the
+sensitive centres become the half-integers, and since `q` is odd a first-two
+centre `N/q` can never be a half-integer, so part 1 alone closes the first two
+calls unconditionally — while leaving the last two, which are the cheapest
+key-recovery positions, exactly as exposed as `floor` did.
+
+### 3. Two algebraically equal formulations that the text does not choose between
 
 Two places where the specification's formulas and the reference's code are
 algebraically identical produce different intermediate values, and those
@@ -112,12 +213,18 @@ algebraically equivalent formulations are not interchangeable.
 We would also suggest adopting the countermeasure of that paper's section 7.1
 (sample the centre with `round` rather than `floor`, and require
 `||(g,-f)||^2` odd), which removes the sensitivity itself rather than any one
-instance of it. We note in passing that we reproduce its observation that the
-C reference generates only keys with `||(g,-f)||^2` even, which blocks that
-countermeasure until the key generation's parity condition is relaxed: all 100
-of our independently generated keys are even.
+instance of it — subject to the caveat in section 2 above that both of its
+parts must be mandated together. We reproduce its observation that the C
+reference generates only keys with `||(g,-f)||^2` even (all 100 of ours are),
+and we can confirm that this is a fixable property rather than an obstacle: the
+reason is that `gen_poly_cdt` forces the coefficient sums of *both* `f` and `g`
+odd, so `||(g,-f)||^2 = f(1) + g(1) = 0 (mod 2)`; requiring only one of the two
+to be odd leaves the Pornin-Prest descent working (40 of 40 solver successes)
+and every resulting key has an odd norm (0 of 40 in the control). The
+key-generation change is therefore a normative change to the standard's key
+generation, not an implementation note, and it needs to be written down.
 
-### 2. `sigma` and `sigma_min` come from different `epsilon`
+### 4. `sigma` and `sigma_min` come from different `epsilon`
 
 Table 3.3 of the round-3 specification lists both. Section 2.6 gives
 `sigma` by equation (2.13) with `eps <= 1/sqrt(Q_s * lambda)`, `Q_s = 2^64`,
@@ -139,7 +246,7 @@ derivation. A reader who assumes the two share an `epsilon` — which the text
 does not warn against — gets a value that is 10% wrong and that no test will
 catch, because `sigma_min` only enters as a lower bound.
 
-### 3. `fpr_inv_sigma` is not the correctly rounded reciprocal of `sigma`
+### 5. `fpr_inv_sigma` is not the correctly rounded reciprocal of `sigma`
 
 The reference stores `1/sigma` per degree in `fpr_inv_sigma[]` (`fpr.h`) and
 multiplies the ffLDL tree leaves by it (`ffLDL_binary_normalize` in `sign.c`:
@@ -170,9 +277,9 @@ is about 1e-11 per signature. Our 100000-signature run observed none, but its
 resolution is 3e-5, six orders of magnitude too coarse to have seen anything
 either way.
 
-The contrast with section 1 is still the useful part, and it is the contrast
+The contrast with section 3 is still the useful part, and it is the contrast
 between those two lemmas: this constant perturbs the sampler's *width*, which
-enters `BerExp`'s comparison smoothly, while section 1's differences perturb
+enters `BerExp`'s comparison smoothly, while section 3's differences perturb
 its *centre*, which passes through `floor`. Whether an underdetermined choice
 reaches the signature depends on which quantity it reaches, not on how large
 it is.
@@ -187,7 +294,7 @@ The array holds `sigma_min` itself (1.2778... at `logn = 9`, which is Table
 3.3's value, not its reciprocal). The code uses it correctly; only the comment
 is wrong.
 
-### 4. The SamplerZ test vectors' byte-consumption convention
+### 6. The SamplerZ test vectors' byte-consumption convention
 
 Table 3.2 of the round-3 specification gives sixteen `SamplerZ` test vectors
 as `randombytes` hex strings. Section 3.9.3 explains which bytes go to which
@@ -209,19 +316,32 @@ applies `bytes.fromhex(oc)[::-1]`).
   a directly seeded PRNG, which is what made the comparison possible
 - `test/vectors/cref_sign_kat.jl` — the reference's own signing output,
   recorded so the reproduction is checkable without a C compiler
+- `scripts/cref_contract.sh` — section 1 end to end: the contraction probe, the
+  three builds, the 100000-signature comparison, the eight-configuration
+  negative control, the key recovery, and the FALCON-1024 replication, in one
+  script (2 minutes 41 seconds)
+- `scripts/cref_contract_recover.jl` — the section 5.1 recovery run on the real
+  cross-build pairs, from the two signatures and the public key alone
+- `scripts/event_solve.jl` — section 2: the key recovered from first-two events
+  by Gaussian elimination over `F_q`
+- `scripts/window.jl` — the two-sided condition under which an implementation
+  difference is an oracle for those events, with both ends measured
 - `scripts/divergence_rate.jl` — the 100000-signature measurement of both
-  section 1 and section 3, run at the same sample size
+  section 3 and section 5, run at the same sample size
 - `scripts/first_divergence.jl` — for each divergent pair, the first sampler
   call at which the two disagree, with both centres printed
 - `scripts/inv_sigma_audit.jl` — the ulp table in section 3
-- `docs/debug_log.md` #046, #048, #050, #053, #054, #055, #056 — the
+- `docs/debug_log.md` #046–#071 — the
   measurements behind each claim, including the hypotheses we tested and
   rejected. #054 records that we asserted the opposite of section 1's
   conclusion three times on a 480-signature sample before measuring at a
   sample size that could see it; #055 records that our first version of
   section 1 was a rediscovery of ePrint 2024/1709 section 6.1, because a
   single toggle we had not read carefully was moving only one of the three
-  formulations we had named.
+  formulations we had named. #071 records that our first statement of section 1
+  above — that GCC and clang *defaults* diverge — was wrong, and that building
+  the reference rather than modelling it is what produced the correct and
+  narrower claim.
 
 We would be glad to supply anything further that is useful.
 
@@ -229,6 +349,21 @@ We would be glad to supply anything further that is useful.
 
 ## 日本語メモ（投稿時には削る）
 
+- **§1（FP_CONTRACT）が最も強く、最も具体的で、最も直しやすい。**
+  「参照実装そのものが、適合する 2 通りのビルドで違う署名を出し、
+  12 件中 8 件で鍵が出る」は、仕様書の書き方の話ではなく**実測された事故**である。
+  IPD が FMA を禁ずるにしても、「`fma()` を呼ぶな」ではなく
+  **「縮約を無効にせよ」**でなければ今回の事例を覆えない ―
+  誰も `fma` と書いていないのだから。ここを強調すること。
+- **陰性対照を必ず一緒に書く。** 8 構成がバイト一致することを書かずに
+  「ビルドで署名が変わる」とだけ言うと、警告として強すぎて行動に移せない。
+  「旗ひとつ」に絞れるのは対照があるからである。
+- **§2 は「アルゴリズムを変えろ」ではない。**「最初の2回は無害」という
+  <em>根拠</em>に寄りかかった対策を書かないでほしい、という要請にとどめる。
+  こちらのオラクルは実装差であって、plain Falcon への実働攻撃は主張しない。
+- **偶数ノルムの件は #067 で撤回済み。** 「配備できない」と書かないこと。
+  正しくは「片方のパリティを外せば 40/40 で解け、全部奇数ノルムになる」＝
+  **鍵生成の規範的変更として書き下す必要がある**。
 - 論点は 2024/1709（Sleeping Falcon）と**同じ機構**である。
   違うのは摂動源で、あちらは **FMA** と **同一実装の 2 入口**
   （`sign_dyn`/`sign_tree`）、こちらは**仕様書と参照実装の差**。
