@@ -26,11 +26,13 @@ signatures with matched controls, which of these reach the signature. Two
 spellings — complex division and the `D11` entry of LDL\* — change the signature
 at ≈ 7.5 × 10⁻⁶ per signature, always at the last two sampler calls, the
 positions where ePrint 2024/1709 (Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025) turns a
-single discrepant pair into full key recovery. Unlike the perturbations that
-paper studies, these are differences between the *specification* and the
-*reference*, present in both of the reference's signing modes, and not removed
-by its countermeasure. We reproduce that paper's mechanism independently and
-check its Heuristic 1 directly (which it does not). Performance: this
+single discrepant pair into full key recovery — and we run that recovery,
+reconstructing the private key from one A2 discrepant pair and the public key
+alone. Unlike the perturbations that paper studies, these are differences
+between the *specification* and the *reference*, present in both of the
+reference's signing modes, and not removed by its `sign_dyn`/`sign_tree`
+countermeasure. We reproduce that paper's mechanism independently, check its
+Heuristic 1 directly (which it does not), and confirm the effect at n = 1024. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -132,11 +134,13 @@ for this particular question.
 3. **A measurement of which of these reach the signature, and how often** (§6),
    with matched positive and negative controls, and a direct check of the
    arithmetic mechanism ePrint 2024/1709 identifies.
-4. **One instance that ePrint 2024/1709 does not cover** (§7): complex division
-   and the `D11` entry of LDL\* differ between the specification and the
+4. **One instance that ePrint 2024/1709 does not cover** (§6.1, §7): complex
+   division and the `D11` entry of LDL\* differ between the specification and the
    reference, are present in **both** of the reference's signing modes, reach
-   the signature at ≈ 7.5 × 10⁻⁶ per signature at the key-recovery position, and
-   are not removed by that paper's countermeasure.
+   the signature at ≈ 7.5 × 10⁻⁶ per signature at the key-recovery position, are
+   not removed by that paper's `sign_dyn`/`sign_tree` countermeasure, and
+   **from one such pair we recover the private key** (§6.1). The effect
+   replicates at n = 1024.
 5. **An honest three-way performance comparison** (§9) against a range of C
    builds (two compilers, three optimization levels, emulated and native
    floating point) and the Python reference, reported as distributions rather
@@ -438,7 +442,26 @@ bit-identical between the two runs — so the divergence is carried entirely by
 the centre. This is Lemma 1, not Lemma 2, at the position where §5 of that paper
 recovers the whole private key from a single pair.
 
-### 6.1 The near-integer centres, measured directly
+### 6.1 The divergence recovers the private key
+
+"At the key-recovery position" is a claim about consequences, and we discharge
+it rather than cite it. Taking the A2 divergent pair `(s, s')` at key 70,
+signature 534 — two signatures on the same syndrome, differing only in the last
+two sampler outputs — we run ePrint 2024/1709 §5.1's recovery
+(`scripts/key_recovery.jl`). The signature difference is `Δs0 = Δz0·g`,
+`Δs1 = −Δz0·f` with `Δz0 = a + b·x^{n/2}`, and since
+`(a + b x^{n/2})^{-1} = (a − b x^{n/2})/(a² + b²)` the recovery is a search over
+`(a, b) ∈ {−19,…,19}²` — no ring inversion. From `(s, s')` and the public key
+`h` **alone** (not the secret, not `z`), the search recovers a short `(f, g)`
+with `max|g| = 14`, `max|f| = 13` — matching the true key's coefficient sizes —
+that reproduces `h` mod `q`. It equals the stored secret up to the negation
+symmetry `(f,g) ↦ (−f,−g)`, which is the same signing key. **This is full key
+recovery from a single A2 discrepant pair.** Complex division and `D11` — which
+ePrint 2024/1709 does not consider — therefore suffice not merely to change the
+signature but to expose the key, in the derandomized settings where the same
+syndrome is signed twice.
+
+### 6.2 The near-integer centres, measured directly
 
 ePrint 2024/1709 measures the *consequence* of Heuristic 1 (its Tables 2, 4) and
 notes (Remark 1) that the heuristic cannot be made a theorem. We measure the
@@ -764,6 +787,7 @@ runs unless a measurement asks otherwise.
 | byte-exact reproduction | `julia --project=falcon -e 'using Pkg; Pkg.test()'` (the "byte for byte" testset) |
 | divergence rates (§6) | `julia --project=falcon falcon/scripts/divergence_rate.jl 100 1000` |
 | one divergence, mechanism (§6) | `julia --project=falcon falcon/scripts/first_divergence.jl A2 70 534` |
+| key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |

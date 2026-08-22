@@ -154,8 +154,8 @@
   </div>
   <div class="stat">
     <div class="k">新しい発散 (A2)</div>
-    <div class="v sig">7.5×10⁻⁶</div>
-    <div class="d">複素除算と <span class="mono">D11</span> が署名を変える ― 必ず鍵回復の位置で。</div>
+    <div class="v sig">鍵を復元</div>
+    <div class="d">複素除算と <span class="mono">D11</span> が 7.5×10⁻⁶ で署名を変え、その1ペアから秘密鍵を復元できる。</div>
   </div>
   <div class="stat">
     <div class="k">検証の速さ</div>
@@ -270,6 +270,16 @@ D11 = sub_fft(G[2,2],
 key 70 sig  534   call 1023/1024   mu -267.00000000000006  vs -267
 key 65 sig 1239   call 1023/1024   mu  337                 vs  336.99999999999994
 key 68 sig 1885   call 1024/1024   mu  285.99999999999989  vs  286</pre>
+
+<h3>その1ペアから、鍵</h3>
+<p>「鍵回復の位置」は帰結の主張だ ― 引用でなく実行して片づける。A2 ペア（key 70, sig 534、同じ syndrome で最後の2回のサンプラ出力だけ違う2署名）の差は <span class="mono">Δs0 = Δz0·g</span>, <span class="mono">Δs1 = −Δz0·f</span>、<span class="mono">Δz0 = a + b·x^{n/2}</span>。<span class="mono">(a+bx^{n/2})⁻¹ = (a−bx^{n/2})/(a²+b²)</span> なので、復元は <span class="mono">(a,b) ∈ {−19..19}²</span> の探索で済み、環の逆元計算は要らない。<span class="mono">(s, s')</span> と公開鍵<strong>だけ</strong>から：</p>
+<pre><span class="cm"># scripts/key_recovery.jl 70 534</span>
+hit at (a, b) = (-1, 0)
+candidate reproduces the public key h (mod q): yes
+|g_cand| max = 14, |f_cand| max = 13   (true |g| = 14, |f| = 13)
+matches the stored secret up to negation: (f,g) = -(f_true, g_true)
+<span style="color:var(--signal);font-weight:600;">*** 単一の A2 発散ペアから、秘密鍵を完全復元。***</span></pre>
+<p>復元された <span class="mono">(f, g)</span> は符号対称 <span class="mono">(f,g) ↦ (−f,−g)</span> を除いて格納鍵と一致 ― 同じ署名鍵だ。つまり複素除算と <span class="mono">D11</span> は、署名を変えるだけでなく、syndrome を2回署名する derandomized の設定で<strong>鍵を露出させる</strong>のに十分。復元の代数は回帰テスト済み（<span class="mono">test_falcon.jl</span>）。</p>
 
 <span class="secnum">04 — 位置づけ</span>
 <h2>何が新しく、何が新しくないか</h2>

@@ -228,8 +228,8 @@
   </div>
   <div class="stat">
     <div class="k">New divergence (A2)</div>
-    <div class="v sig">7.5×10⁻⁶</div>
-    <div class="d">Complex division + <span class="mono">D11</span> change the signature — always at the key-recovery position.</div>
+    <div class="v sig">key recovered</div>
+    <div class="d">Complex division + <span class="mono">D11</span> change the signature at 7.5×10⁻⁶ — and from one such pair we reconstruct the private key.</div>
   </div>
   <div class="stat">
     <div class="k">Verification speed</div>
@@ -355,6 +355,16 @@ D11 = sub_fft(G[2,2],
 key 70 sig  534   call 1023/1024   mu -267.00000000000006  vs -267
 key 65 sig 1239   call 1023/1024   mu  337                 vs  336.99999999999994
 key 68 sig 1885   call 1024/1024   mu  285.99999999999989  vs  286</pre>
+
+<h3>From one such pair, the key</h3>
+<p>"At the key-recovery position" is a claim about consequences; we discharge it rather than cite it. Taking the A2 pair at key 70, sig 534 — two signatures on the same syndrome differing only in the last two sampler outputs — the difference is <span class="mono">Δs0 = Δz0·g</span>, <span class="mono">Δs1 = −Δz0·f</span> with <span class="mono">Δz0 = a + b·x^{n/2}</span>, and since <span class="mono">(a+bx^{n/2})⁻¹ = (a−bx^{n/2})/(a²+b²)</span> recovery is a search over <span class="mono">(a,b) ∈ {−19..19}²</span> — no ring inversion. From <span class="mono">(s, s')</span> and the public key <strong>alone</strong>:</p>
+<pre><span class="cm"># scripts/key_recovery.jl 70 534</span>
+hit at (a, b) = (-1, 0)
+candidate reproduces the public key h (mod q): yes
+|g_cand| max = 14, |f_cand| max = 13   (true |g| = 14, |f| = 13)
+matches the stored secret up to negation: (f,g) = -(f_true, g_true)
+<span style="color:var(--signal);font-weight:600;">*** FULL KEY RECOVERY from a single A2 discrepant pair. ***</span></pre>
+<p>The recovered <span class="mono">(f, g)</span> is the stored key up to the negation symmetry <span class="mono">(f,g) ↦ (−f,−g)</span> — the same signing key. So complex division and <span class="mono">D11</span> suffice not merely to change the signature but to <strong>expose the key</strong>, in the derandomized settings where a syndrome is signed twice. The recovery algebra is regression-tested (<span class="mono">test_falcon.jl</span>).</p>
 
 <span class="secnum">04 — Positioning</span>
 <h2>What is new, and what is not</h2>

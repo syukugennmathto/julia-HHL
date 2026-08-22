@@ -345,4 +345,46 @@
             @test Int.(a) == want_s2
         end
     end
+
+    @testset "key recovery algebra (ePrint 2024/1709 sec 5.1)" begin
+        # The identity behind scripts/key_recovery.jl, which recovers the
+        # private key from a single A2 discrepant pair (docs/paper.md sec 6.1).
+        # A last-two-call divergence gives, over R = Z[x]/(x^n+1),
+        #     Δs0 = Δz0 · g,   Δz0 = a + b x^{n/2},
+        # and (a + b x^{n/2})(a - b x^{n/2}) = a^2 + b^2 because x^n = -1, so
+        #     g = Δs0 · (a - b x^{n/2}) / (a^2 + b^2)
+        # with no general ring inversion.  This tests that recovery on synthetic
+        # data, so the full 382-pair search in the script is regression-guarded
+        # without paying for the 70-key reproduction.
+        ringmul(u, v) = begin              # multiply in Z[x]/(x^n+1)
+            n = length(u); w = zeros(Int, n)
+            for i in 0:n-1, j in 0:n-1
+                k = i + j; c = u[i+1] * v[j+1]
+                w[mod(k, n) + 1] += k < n ? c : -c
+            end
+            w
+        end
+        mulsparse(v, a, b) = begin          # v * (a - b x^{n/2}) in the ring
+            n = length(v); h = n ÷ 2; out = a .* v
+            for k in 0:n-1
+                src = k - h
+                out[k+1] -= b * (src >= 0 ? v[src+1] : -v[src+n+1])
+            end
+            out
+        end
+        rng = MersenneTwister(0xFA1C0)
+        for n in (8, 16, 32), _ in 1:20
+            g = rand(rng, -12:12, n); f = rand(rng, -12:12, n)
+            a = rand(rng, -19:19); b = rand(rng, -19:19)
+            (a == 0 && b == 0) && continue
+            dz0 = zeros(Int, n); dz0[1] = a; dz0[n ÷ 2 + 1] = b
+            ds0 = ringmul(dz0, g); ds1 = ringmul(dz0, .-f)
+            d = a * a + b * b
+            grec = mulsparse(ds0, a, b) .÷ d
+            frec = .-(mulsparse(ds1, a, b) .÷ d)
+            @test all(iszero, mulsparse(ds0, a, b) .% d)   # exact division
+            @test grec == g
+            @test frec == f
+        end
+    end
 end
