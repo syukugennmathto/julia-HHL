@@ -327,6 +327,21 @@ pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7�
 </div>
 <p>両端は Poisson 誤差の内側で一致し、内部は 1.02×10⁸ 回にわたり空だ。100 鍵すべてが<strong>偶数</strong>の ‖(g,−f)‖² を持ち、同論文 §7.1 が指摘する C 参照実装の癖を ― それが効くと知らずに C の鍵生成を追った実装から ― 追認する。</p>
 
+<h3>他の方式は影響を受けるか ― 参照実装を読んで確かめた</h3>
+<p>2024/1709 は Mitaka/Antrag を「中心が連続だから安全」とする。これを検証し、HAWK まで拡張した ― 移植でなく参照実装（<span class="mono">Mitaka-EC22</span>, <span class="mono">antrag</span>, KAT 検証済み <span class="mono">lil-hawk-py</span>）を直読して。移植バグを発見と取り違えないためだ。</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>方式</th><th>サンプラの中心</th><th>署名にFP</th><th>感受性</th></tr></thead>
+<tbody>
+<tr class="hl"><td>Falcon</td><td>有理・小分母（4位置で q や ‖(g,−f)‖²）</td><td>有</td><td class="lose">有</td></tr>
+<tr><td>Mitaka</td><td>連続（Box–Muller 摂動）</td><td>有</td><td class="win">無</td></tr>
+<tr><td>Antrag</td><td>連続（Mitaka 上に構築）</td><td>有</td><td class="win">無</td></tr>
+<tr><td>HAWK</td><td>{0, ½} パリティビット・固定CDT</td><td><strong>無</strong></td><td class="win">無</td></tr>
+</tbody>
+</table>
+</div>
+<p>footnote 6 は構成上正しい（Mitaka の <span class="mono">normaldist</span> が中心を連続化、HAWK の署名は全整数で FP FFT は<em>検証側</em>のみ）。ここから2条件則が出る：感受性には<strong>(a) 署名サンプラの浮動小数点</strong>と<strong>(b) 小分母の有理中心</strong>の両方が要る。Falcon だけが両方を満たす ― 危険は格子署名一般ではなく Falcon 固有の設計に起因し、修正は FN-DSA に属する。</p>
+
 <span class="secnum">05 — 性能</span>
 <h2>どれくらい速いか、何に対して</h2>
 <p>1 台（4 コア、FMA 付き x86-64 ― 1 台という制約は実在し、隠さない）。変えられるものは変えた ― C は 2 コンパイラ・3 最適化レベル・エミュ対ネイティブ浮動小数点、Julia は 3 最適化レベル、そして run 間分布の中央値を報告する。</p>

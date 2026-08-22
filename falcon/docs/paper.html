@@ -415,6 +415,21 @@ An earlier framing claimed specification underdetermination alone suffices, "no 
 </div>
 <p>Both ends agree inside Poisson error; the interior is empty across 1.02×10⁸ draws. All 100 keys have <strong>even</strong> ‖(g,−f)‖², reproducing the C-reference idiosyncrasy that §7.1 of that paper flags — from an implementation that followed the C key generation without knowing it mattered.</p>
 
+<h3>Is any other scheme affected? We read their code to find out</h3>
+<p>2024/1709 says Mitaka and Antrag, though they reuse Falcon's <span class="mono">SamplerZ</span>, are safe because their centres are continuous. We tested that — and extended it to HAWK — by reading the reference implementations (<span class="mono">Mitaka-EC22</span>, <span class="mono">antrag</span>, the KAT-validated <span class="mono">lil-hawk-py</span>) rather than porting, so no port bug can be mistaken for a finding.</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>scheme</th><th>centre into the sampler</th><th>FP in signing</th><th>sensitive</th></tr></thead>
+<tbody>
+<tr class="hl"><td>Falcon</td><td>rational, denom q or ‖(g,−f)‖² at 4 positions</td><td>yes</td><td class="lose">yes</td></tr>
+<tr><td>Mitaka</td><td>continuous (Box–Muller perturbation)</td><td>yes</td><td class="win">no</td></tr>
+<tr><td>Antrag</td><td>continuous (builds on Mitaka)</td><td>yes</td><td class="win">no</td></tr>
+<tr><td>HAWK</td><td>{0, ½} parity-bit, fixed CDT</td><td><strong>no</strong></td><td class="win">no</td></tr>
+</tbody>
+</table>
+</div>
+<p>Footnote 6 holds by construction (Mitaka's <span class="mono">normaldist</span> makes the centre continuous; HAWK's signing is all-integer, its only FP FFT being in the <em>verifier</em>). The exercise gives a two-condition rule: the sensitivity needs <strong>both</strong> (a) floating point in the signing sampler <strong>and</strong> (b) a small-denominator rational centre. Falcon alone has both — so the hazard is specific to its design, and the fix belongs in FN-DSA, not a generic lattice-signature guideline.</p>
+
 <span class="secnum">05 — Performance</span>
 <h2>How fast, against what</h2>
 
