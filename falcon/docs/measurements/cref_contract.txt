@@ -25,6 +25,19 @@ gc_def  privkey fnv 39afef910dae5682
 gcc default == clang default : identical over 100000 signatures
 clang -ffp-contract=fast vs clang default : 12 of 100000 differ (rate 0.00012)
 
+## step 3b -- the negative control: do ORDINARY build choices diverge?
+30000 signatures per build
+  group 1 (byte-identical): gcc -O2 native, gcc -O2 -march=native, gcc AVX2 path, gcc -O2 emulated FP, gcc -march=native emulated, clang -O2 native, clang AVX2 path, clang -O2 emulated FP
+  group 2 (byte-identical): clang -ffp-contract=fast
+  gcc -O2 native               vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -O2 -march=native        vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc AVX2 path                vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -O2 emulated FP          vs clang -ffp-contract=fast     : 5 of 30000 differ
+  gcc -march=native emulated   vs clang -ffp-contract=fast     : 5 of 30000 differ
+  clang -O2 native             vs clang -ffp-contract=fast     : 5 of 30000 differ
+  clang AVX2 path              vs clang -ffp-contract=fast     : 5 of 30000 differ
+  clang -O2 emulated FP        vs clang -ffp-contract=fast     : 5 of 30000 differ
+
 ## step 4 -- key recovery from each divergent pair
 # cref_contract_recover.jl -- two builds of the C reference, n=512
 # /tmp/cref_contract/dump_fast.txt  vs  /tmp/cref_contract/dump_def.txt
@@ -49,6 +62,6 @@ message 87268  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERE
 # ePrint 2024/1709 section 5 sets aside, and the ones section 6.5 turns into
 # one F_q equation each.
 
-real	2m41.125s
-user	2m39.958s
-sys	0m1.329s
+## step 5 -- the same at FALCON-1024
+fast privkey fnv 4894e18f1d4c3175   def privkey fnv 4894e18f1d4c3175
+FALCON-1024: 6 of 60000 differ (rate 0.0001)

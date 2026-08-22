@@ -63,10 +63,15 @@ modelling and build the C reference itself: **compiled with `clang -O2
 -march=native -ffp-contract=fast` it disagrees with the same clang at its
 default on 12 of 100000 signatures, and 8 of those 12 pairs yield the private
 key**, each an exact NTRU symmetry of the stored one. The remaining 4 are
-divergences at the first two calls — the channel above. `-Ofast` and
-`-ffast-math` imply the flag; what protects the reference at both compilers'
-defaults is the `fpr` struct wrapper, introduced for type safety, whose
-FP_CONTRACT-blocking effect is documented nowhere. Performance: this
+divergences at the first two calls — the channel above — and the result
+replicates at n = 1024. `-Ofast` and `-ffast-math` imply the flag. The negative
+control matters as much: eight ordinary configurations — two compilers, native
+against emulated floating point, baseline against `-march=native`, and the
+reference's separate AVX2 code path — are byte-identical over 30000 signatures,
+so the hazard is *one flag*, not build variation in general. What protects the
+reference at both compilers' defaults turns out to be the `fpr` struct wrapper,
+introduced for type safety, whose FP_CONTRACT-blocking effect is documented
+nowhere. Performance: this
 implementation is 20–300× faster than the Python reference, beats the widely
 deployed emulated-floating-point C build on key generation and signing at
 n = 512, and is the fastest of every build we measured at verification, while
@@ -967,6 +972,33 @@ The two coefficient counts separate cleanly — 916–966 for the recoverable pa
 1020–1023 for the others — which is a usable classifier and closes the last gap
 in §6.6's noise accounting: an adversary who sees the two signatures can tell
 the two channels apart without knowing anything else.
+
+**The negative control, which is most of the value.** If ordinary build choices
+diverged too, the result would be alarming and useless — one could not tell
+which difference mattered. They do not. Eight configurations, over 30000
+signatures each:
+
+| configuration | |
+|:--|:--|
+| `gcc -O2` native double | |
+| `gcc -O2 -march=native` | **all eight** |
+| `gcc` AVX2 code path (`-DFALCON_AVX2=1`) | **byte-identical** |
+| `gcc -O2` emulated FP | **to each other** |
+| `gcc -march=native` emulated FP | |
+| `clang -O2` native double | |
+| `clang` AVX2 code path | |
+| `clang -O2` emulated FP | |
+| `clang -O2 -march=native -ffp-contract=fast` | **differs from all eight** |
+
+Two compilers, native against emulated floating point, baseline against
+`-march=native`, and the reference's separate AVX2 implementation of the FFT —
+all agree bit for bit. The emulated build agreeing with the native one is worth
+noting on its own: the reference's `config.h` recommends emulation *because*
+native FPUs "may yield slight discrepancies that could affect determinism", and
+on this platform they do not. The whole divergence is one flag.
+
+**It replicates at FALCON-1024**: 6 of 60000, rate 1.0 × 10⁻⁴, with both builds
+again producing the identical key from the identical seed.
 
 ### 6.8 Two directions that did not pan out (recorded honestly)
 

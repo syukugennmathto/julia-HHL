@@ -82,9 +82,70 @@ PY
 [ -n "$IDX" ] || { echo "no divergence in $N signatures; try more"; exit 0; }
 
 echo
+echo "## step 3b -- the negative control: do ORDINARY build choices diverge?"
+M=${M:-30000}
+build() { nm=$1; shift; "$@" -I "$HERE/cref" -o "$OUT/$nm" "$HERE/cref_contract_diff.c" $SRC -lm; }
+build m_g_base  gcc   -O2 -DFALCON_FPNATIVE=1
+build m_g_mnat  gcc   -O2 -march=native -DFALCON_FPNATIVE=1
+build m_g_avx2  gcc   -O2 -march=native -DFALCON_FPNATIVE=1 -DFALCON_AVX2=1
+build m_g_emu   gcc   -O2 -DFALCON_FPEMU=1
+build m_g_emun  gcc   -O2 -march=native -DFALCON_FPEMU=1
+build m_c_base  clang -O2 -DFALCON_FPNATIVE=1
+build m_c_avx2  clang -O2 -march=native -DFALCON_FPNATIVE=1 -DFALCON_AVX2=1
+build m_c_emu   clang -O2 -DFALCON_FPEMU=1
+for NAME in m_g_base m_g_mnat m_g_avx2 m_g_emu m_g_emun m_c_base m_c_avx2 m_c_emu; do
+  "$OUT/$NAME" "$M" > "$OUT/$NAME.bin" 2>/dev/null
+done
+python3 - "$OUT" "$M" <<'PY2'
+import sys, os, itertools
+O, M = sys.argv[1], int(sys.argv[2])
+names = ["m_g_base","m_g_mnat","m_g_avx2","m_g_emu","m_g_emun",
+         "m_c_base","m_c_avx2","m_c_emu","cl_fast"]
+label = {"m_g_base":"gcc -O2 native", "m_g_mnat":"gcc -O2 -march=native",
+         "m_g_avx2":"gcc AVX2 path", "m_g_emu":"gcc -O2 emulated FP",
+         "m_g_emun":"gcc -march=native emulated", "m_c_base":"clang -O2 native",
+         "m_c_avx2":"clang AVX2 path", "m_c_emu":"clang -O2 emulated FP",
+         "cl_fast":"clang -ffp-contract=fast"}
+d = {}
+for n in names:
+    p = os.path.join(O, n + ".bin")
+    if os.path.exists(p):
+        d[n] = open(p, "rb").read()[:8*M]
+n = min(len(v) for v in d.values()) // 8
+groups = {}
+for k in d: groups.setdefault(d[k][:8*n], []).append(k)
+print("%d signatures per build" % n)
+for i, (_, v) in enumerate(sorted(groups.items(), key=lambda kv: -len(kv[1]))):
+    print("  group %d (byte-identical): %s" % (i+1, ", ".join(label[x] for x in v)))
+for a, b in itertools.combinations(list(d), 2):
+    x, y = d[a][:8*n], d[b][:8*n]
+    c = sum(1 for i in range(n) if x[8*i:8*i+8] != y[8*i:8*i+8])
+    if c:
+        print("  %-28s vs %-28s : %d of %d differ" % (label[a], label[b], c, n))
+PY2
+
+echo
 echo "## step 4 -- key recovery from each divergent pair"
 "$OUT/cl_fast" "$N" -d "$IDX" > "$OUT/dump_fast.txt" 2>/dev/null
 "$OUT/cl_def"  "$N" -d "$IDX" > "$OUT/dump_def.txt"  2>/dev/null
 cd "$ROOT"
 julia --project=falcon falcon/scripts/cref_contract_recover.jl \
       "$OUT/dump_fast.txt" "$OUT/dump_def.txt"
+
+echo
+echo "## step 5 -- the same at FALCON-1024"
+K=${K:-60000}
+clang -O2 -march=native -ffp-contract=fast -DFALCON_FPNATIVE=1 -DFALCON_LOGN=10 \
+      -I "$HERE/cref" -o "$OUT/f10_fast" "$HERE/cref_contract_diff.c" $SRC -lm
+clang -O2 -march=native                    -DFALCON_FPNATIVE=1 -DFALCON_LOGN=10 \
+      -I "$HERE/cref" -o "$OUT/f10_def"  "$HERE/cref_contract_diff.c" $SRC -lm
+"$OUT/f10_fast" "$K" > "$OUT/f10_fast.bin" 2> "$OUT/f10_fast.err"
+"$OUT/f10_def"  "$K" > "$OUT/f10_def.bin"  2> "$OUT/f10_def.err"
+echo "fast $(head -1 "$OUT/f10_fast.err")   def $(head -1 "$OUT/f10_def.err")"
+python3 - "$OUT/f10_fast.bin" "$OUT/f10_def.bin" <<'PY3'
+import sys
+a=open(sys.argv[1],'rb').read(); b=open(sys.argv[2],'rb').read()
+n=min(len(a),len(b))//8
+d=[i for i in range(n) if a[8*i:8*i+8]!=b[8*i:8*i+8]]
+print("FALCON-1024: %d of %d differ (rate %.3g)" % (len(d), n, len(d)/n))
+PY3

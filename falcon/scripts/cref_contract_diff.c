@@ -60,9 +60,23 @@ static void hexline(const char *tag, long j, const unsigned char *p, size_t n) {
 }
 
 int main(int argc, char **argv) {
-    unsigned logn = 9;
+    /* FALCON_LOGN may be set at compile time to 10 for FALCON-1024. */
+#ifndef FALCON_LOGN
+#define FALCON_LOGN 9
+#endif
+    unsigned logn = FALCON_LOGN;
     long n = argc > 1 ? atol(argv[1]) : 100000;
     const char *dump = (argc > 3 && strcmp(argv[2], "-d") == 0) ? argv[3] : 0;
+    long dmax = -1;
+    if (dump) {          /* stop as soon as the last requested index is past */
+        const char *pp = dump;
+        while (*pp) {
+            long v = strtol(pp, (char **)&pp, 10);
+            if (v > dmax) dmax = v;
+            if (*pp == ',') pp++; else break;
+        }
+        if (dmax + 1 < n) n = dmax + 1;
+    }
 
     shake256_context rng;
     unsigned char seed[32];

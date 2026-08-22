@@ -5243,6 +5243,26 @@ clang -ffp-contract=fast vs clang default : 12 of 100000 differ (rate 1.2e-4)
 2024/1709 §5 が「短い格子ベクトルにしかならない」と退けた位置に、
 参照実装が、ビルド旗ひとつで、実際に落ちている。
 
+### 事実 3 ― 陰性対照: 「普通のビルドの違い」は一切発散しない（これが価値の半分）
+
+普通の選択でも発散するなら、警告としては強くても**使い物にならない**
+（どの差が効いたか言えない）。8構成 × 3万署名で測る:
+
+```
+group 1 (byte-identical): gcc -O2 native, gcc -O2 -march=native, gcc AVX2 path,
+                          gcc -O2 emulated FP, gcc -march=native emulated,
+                          clang -O2 native, clang AVX2 path, clang -O2 emulated FP
+group 2                 : clang -ffp-contract=fast
+```
+
+2コンパイラ、native 対 emulated、baseline 対 `-march=native`、
+そして参照実装が別に持っている **AVX2 版 FFT** ― **全部ビット一致**。
+emulated と native が一致するのは単独で意味がある: `config.h` は
+「native FPU は determinism に影響しうる差を生む」から emulation を薦めているが、
+この環境では生まない。**発散は旗ひとつに帰属する。**
+
+**FALCON-1024 でも再現**: 6 / 60000（率 1.0e-4）、鍵は両ビルドで一致。
+
 ### 外した仮説
 
 1. **「GCC の既定は `-ffp-contract=fast` だから、GCC ビルドと clang ビルドが
