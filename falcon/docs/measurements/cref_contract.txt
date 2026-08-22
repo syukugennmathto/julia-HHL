@@ -57,18 +57,27 @@ clang -ffp-contract=fast vs clang default : 12 of 100000 differ (rate 0.00012)
 
 message 7655   : 1023 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
 message 8861   :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^256 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 15028  : 1023 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
 message 23215  :  966 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-2, 1)  ||(g,-f)||^2 = 16676 <= bound 16822  = -x^0 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 23823  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = -x^256 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 38958  : 1020 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
 message 66120  : 1023 of 1024 signature coefficients differ  -> no (a,b): a first-two divergence
 message 69227  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^0 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 69647  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^256 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 78710  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^256 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 85161  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = -x^256 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 message 87268  :  916 of 1024 signature coefficients differ  -> *** KEY RECOVERED *** (a,b)=(-1, 0)  ||(g,-f)||^2 = 16676 <= bound 16822  = x^0 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
 
-# 12 divergent pairs; 8 yielded the private key by section 5.1,
+# 12 divergent pairs; 8 yielded the private key by section 5.1, 8 of which
+#   signed a new message that the original public key accepted;
 # 4 did not -- their dz is not 2-sparse in z0, so the divergence was not
 # at the last two sampler calls.  Section 6.2 measured zero interior integer
 # centres in 1.02e8 draws, so those are first-two divergences: the positions

@@ -62,7 +62,9 @@ licence a compiler has to fuse `a*b + c` — lands inside it. We then stop
 modelling and build the C reference itself: **compiled with `clang -O2
 -march=native -ffp-contract=fast` it disagrees with the same clang at its
 default on 12 of 100000 signatures, and 8 of those 12 pairs yield the private
-key**, each an exact NTRU symmetry of the stored one. The remaining 4 are
+key** — each an exact NTRU symmetry of the stored one, and each used to sign a
+fresh message that the victim's public key accepts. Universal forgery, at a
+cost of ≈ 1.3 × 10⁴ messages. The remaining 4 are
 divergences at the first two calls — the channel above — and the result
 replicates at n = 1024. `-Ofast` and `-ffast-math` imply the flag. The negative
 control matters as much: nine ordinary configurations — two compilers, native
@@ -202,10 +204,10 @@ for this particular question.
    `clang -O2 -march=native -ffp-contract=fast` and with the same clang at its
    default — one flag, which `-Ofast` and `-ffast-math` both imply — gives two
    signers that disagree on **12 of 100000** signatures under one key on one
-   PRNG tape. **Eight of the twelve pairs yield the private key**, each verified
-   to be an exact NTRU symmetry `±x^k(f,g)` with `‖(g,−f)‖²` inside the
-   key-generation bound; the other four are first-two divergences, the channel
-   of contribution 5. This is not a model of an implementation difference: it is
+   PRNG tape. **Eight of the twelve pairs yield the private key**, and all eight
+   then sign a fresh message that the victim's public key accepts — universal
+   forgery, at a cost of ≈ 1.3 × 10⁴ messages; the other four are first-two
+   divergences, the channel of contribution 5. This is not a model of an implementation difference: it is
    the NIST reference, two `make` invocations apart. It also identifies what
    currently prevents it — the `fpr` struct wrapper of `fpr.h`, whose stated
    purpose is type safety and which blocks contraction as a side effect nobody
@@ -955,10 +957,28 @@ message 38958  : 1020 of 1024 coefficients differ -> no (a,b)
 message 66120  : 1023 of 1024 coefficients differ -> no (a,b)
 ```
 
-**Eight of twelve.** Each recovered pair is an exact NTRU symmetry `±x^k(f,g)` of
-the stored key, with `‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822` — a working private
-key, not an approximation of one. Two signatures, from two builds of the
-reference, on one message.
+**Eight of twelve, and all eight forge.** Each recovered pair is an exact NTRU
+symmetry `±x^k(f,g)` of the stored key, with `‖(g,−f)‖² = 16676 ≤ 1.17²q =
+16822`. The public-key relation says the pair is *an* NTRU pair for `h` and the
+norm bound says it is short enough; neither says the sampler will run on it, so
+we settled the question by using it. For each recovered `(f,g)` the script
+completes the trapdoor basis by solving `fG − gF = q` — the same Pornin–Prest
+descent key generation uses, needing nothing the attacker does not have — signs
+a message the victim never signed, and offers it to the victim's public key:
+
+```
+message 8861 : *** KEY RECOVERED *** (a,b)=(-1, 0)  = x^256 (f,g)
+     forged a signature on a NEW message with the recovered key: the ORIGINAL public key ACCEPTS it
+```
+
+**Eight of eight.** This is universal forgery, from two signatures produced by
+two conforming builds of the reference implementation.
+
+The attack's cost follows from the rate. A key-yielding divergence occurs on
+8 of 100000 messages, so an adversary who can obtain signatures on the same
+messages from both builds needs on the order of **1.3 × 10⁴ messages** before
+one pair hands over the key — and then one 40 × 40 search, no lattice
+reduction.
 
 The other four are the point of §6.4–§6.6. Their `Δz` is not 2-sparse in `z₀`
 — that is what the failed exact division proves — so the divergence was not at
@@ -1017,6 +1037,19 @@ path the compiler chose to contract.
 
 **It replicates at FALCON-1024**: 6 of 60000, rate 1.0 × 10⁻⁴, with both builds
 again producing the identical key from the identical seed.
+
+**The window discriminates, which is the point of measuring it.** §6.6 put a
+two-sided condition on when an implementation difference is an oracle for the
+first-two event channel, and the two real differences this paper has land on
+opposite sides of it. The `sign_dyn`/`sign_tree` difference — arm A1, and the
+natural comparator for a redundancy-based fault countermeasure, since re-signing
+through the other entry point is the cheapest self-check a signer can run —
+perturbs the first two centres by 2.7 × 10⁻¹⁵, below the lower edge, so such a
+signer's abort bit carries no equation. A contracting build perturbs them by
+1.4 × 10⁻¹⁴, inside the window, and its abort bit does. Two differences of
+comparable magnitude at the *last* two calls, with opposite consequences at the
+first two: the window is what tells them apart, and neither the magnitude alone
+nor the last-two rate alone would have.
 
 ### 6.8 Two directions that did not pan out (recorded honestly)
 
@@ -1734,8 +1767,9 @@ decades wide, whose lower end is not a matter of anyone's precision but of the
 rounding error the two implementations *share*. Our own respellings fall below
 that window; a single optimization flag falls inside it. Compiled with
 `-ffp-contract=fast`, the reference implementation disagrees with itself on one
-signature in ten thousand, and two thirds of those disagreements hand over the
-private key. What stands between FN-DSA and that today is a `struct` wrapper
+signature in ten thousand; two thirds of those disagreements hand over the
+private key, and every key we recovered signed a message the victim's public
+key then accepted. What stands between FN-DSA and that today is a `struct` wrapper
 introduced for type safety, in a header, with a comment about something else.
 That is the form the problem takes when a signature is a function of
 floating-point arithmetic: the dangerous difference is not the one an

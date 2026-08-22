@@ -80,14 +80,27 @@ only the two signatures, the public key and the message:
     4 of 12 : not recoverable by that route -- these are divergences at the
               FIRST two sampler calls (see section 2 below)
 
+We then checked that the recovered keys are usable rather than merely valid: for
+each, we completed the trapdoor basis by solving fG - gF = q (the same descent
+key generation runs), signed a message the original signer had never signed, and
+offered it to the original public key. All eight were accepted. This is
+universal forgery, and its cost follows from the rate: a key-yielding divergence
+occurs on 8 of 100000 messages, so an adversary able to obtain both builds'
+signatures on the same messages needs on the order of 1.3e4 messages.
+
 The result replicates at FALCON-1024 (6 of 60000).
 
 **The negative control matters as much.** Ordinary build choices do not
-diverge. Over 30000 signatures each, these eight are byte-identical to one
+diverge. Over 30000 signatures each, these nine are byte-identical to one
 another: `gcc -O2` native, `gcc -O2 -march=native`, `gcc` with the reference's
-AVX2 code path, `gcc -O2` emulated floating point, `gcc -march=native` emulated,
-`clang -O2` native, `clang` AVX2, `clang -O2` emulated. Only
-`-ffp-contract=fast` differs. Two compilers, native against emulated floating
+hand-vectorised AVX2 code path, `gcc -O2` emulated floating point,
+`gcc -march=native` emulated, `clang -O2` native, `clang` AVX2, `clang -O2`
+emulated, and `gcc` AVX2 with `-ffp-contract=fast` (GCC does not contract the
+intrinsics either, emitting zero fma instructions there). Only clang with
+`-ffp-contract=fast` differs — and contracting the *vector* path rather than the
+scalar one gives a third, separate stream, so this is not "the reference and one
+broken build" but three mutually inconsistent conforming builds, with the
+divergent message set depending on which code path was contracted. Two compilers, native against emulated floating
 point, and the reference's separate AVX2 implementation of the FFT all agree
 bit for bit — so the hazard is one flag, not build variation in general. (We
 note in passing that the emulated build agreeing with the native one is itself
