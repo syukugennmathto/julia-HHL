@@ -593,6 +593,42 @@ a divergence-rate ratio, and it is consistent both with our 0-of-10 and with
 first two calls. It also means a chosen-message adversary gains nothing at the
 first two positions — the only exploitable end is the last two.
 
+### 6.7 The first two centres are a public linear form in the secret
+
+One structural fact underlies both Heuristic 1's first-two case and a different
+attack shape. In `sample_preimage` the second target component is
+`t1 = (−ĉ·b)/q` with `b = B0[1,2] = −f`, so as a ring element `t1 = (c·f)/q`
+exactly, where `c` is the *public* hashed message. The first descent samples
+`z1` from `t1`, so the first two sampler centres are coefficients of `(c·f)/q`.
+Checked against exact `Int128` negacyclic arithmetic (`scripts/linear_form.jl`),
+they are, at fixed indices and to floating-point error alone:
+
+```
+call 1 : mu = 41.9012124664   (c*f)[256]/q = 41.9012124664   |diff| = 0
+call 2 : mu =  8.6159166734   (c*f)[512]/q =  8.6159166734   |diff| = 2.5e-14
+```
+
+Two consequences. First, **Heuristic 1 becomes a theorem at these two
+positions.** Remark 1 of ePrint 2024/1709 explains why the heuristic cannot be
+made a theorem in general; here it can, because the denominator is exactly `q`
+and the numerator is an explicit integer, so "integer centre" is exactly the
+condition `(c·f)_{n/2−1} ≡ 0 (mod q)`.
+
+Second, that condition is **linear in the secret, with public coefficients**.
+Each *detected* integer-centre event yields one equation `⟨c, x^{n/2}f⟩ ≡ 0
+(mod q)`; `n` independent events determine `f mod q`, and since `‖f‖ ≪ q` that
+determines `f`. This is a different shape from §5.1, which reads the key out of
+the difference *vector* of two signatures — here the leak is the *event*, and no
+difference vector is needed. It applies at the first two calls, the positions
+2024/1709 dismisses as yielding only a short lattice vector.
+
+We are explicit about what is missing: an oracle for the event. The respelling
+perturbation does not provide one — §6.3 shows `|Δμ|` at the first two calls
+sits below the shared rounding offset, and `scripts/first_two_probe.jl`
+manufactured 10 integer centres there with zero straddles. A larger perturbation
+source (FMA), a conformance-mismatch report, or a side channel would. We state
+the shape and its requirement; we do not claim a working attack on plain Falcon.
+
 ### 6.4 Two directions that did not pan out (recorded honestly)
 
 Two hypotheses we tested and rejected, since the boundary they probe is part of
@@ -1117,6 +1153,7 @@ runs unless a measurement asks otherwise.
 | centre denominators (§7.1) | `julia --project=falcon falcon/scripts/denominator_check.jl 100 500` |
 | **break the countermeasure** (§7.1) | `julia --project=falcon falcon/scripts/countermeasure_break.jl 100 1600` |
 | **the replacement countermeasure** (§7.2) | `julia --project=falcon falcon/scripts/snapping.jl` |
+| centres as a linear form in f (§6.7) | `julia --project=falcon falcon/scripts/linear_form.jl` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
