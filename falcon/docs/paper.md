@@ -555,6 +555,27 @@ positions holds for random messages. (Whether a chosen-message adversary can
 reach the interior positions, whose denominators are within double precision up
 to the first and last *six* calls, is left open.)
 
+### 6.6 The leak is structural, not generic rounding
+
+Injecting a uniform perturbation `ε` at every sampler centre and measuring the
+divergence rate (`scripts/precision_law.jl`) confirms Lemma 1's linear law
+empirically — `rate ≈ 2n·ε`, saturating to 1 for `ε ≳ 1/2n`:
+
+| ε          | 2.4e-7 | 9.5e-7 | 3.8e-6 | 1.5e-5 | 6.1e-5 | 9.8e-4 |
+|:-----------|-------:|-------:|-------:|-------:|-------:|-------:|
+| rate       | 4.2e-4 | 3.1e-3 | 1.4e-2 | 5.4e-2 | 1.6e-1 | 9.2e-1 |
+
+The instructive comparison is with the real respellings. A uniform `ε = 10⁻¹⁴`
+would give `rate ≈ 2n·ε ≈ 10⁻¹¹`; the actual respellings, whose perturbation is
+the same size (`|Δμ| ≈ 10⁻¹⁴`, §6.3), produce `≈ 10⁻⁵` — six orders of
+magnitude more. The difference is not the size of the perturbation but where it
+lands: a uniform injection mostly hits generic centres (which straddle with
+probability `ε`), whereas the respelling's perturbation reaches the same
+structured **exact-integer** centres that make the mechanism work. The leak is
+driven by that structure, not by generic floating-point noise — which is why
+improving precision does not remove it (an exact-integer centre is sensitive to
+an arbitrarily small perturbation) and only the structural fix of §7.1 does.
+
 ---
 
 ## 7. Relationship to ePrint 2024/1709
@@ -857,6 +878,7 @@ runs unless a measurement asks otherwise.
 | one divergence, mechanism (§6) | `julia --project=falcon falcon/scripts/first_divergence.jl A2 70 534` |
 | key recovery from an A2 pair (§6.1) | `julia --project=falcon falcon/scripts/key_recovery.jl 70 534` |
 | per-position perturbation profile (§6.3) | `julia --project=falcon falcon/scripts/position_profile.jl 40 250 A1` |
+| precision→rate law (§6.6) | `julia --project=falcon falcon/scripts/precision_law.jl 10 1200` |
 | Heuristic 1 (§6.1) | `julia --project=falcon falcon/scripts/heuristic1_check.jl 100 1000` |
 | `fpr_inv_sigma` audit (§8) | `julia --project=falcon falcon/scripts/inv_sigma_audit.jl` |
 | performance (§9) | `sh falcon/scripts/bench_all.sh` |
