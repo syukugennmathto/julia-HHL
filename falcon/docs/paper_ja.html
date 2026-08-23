@@ -310,6 +310,11 @@ recovered vector: max |.| = 16   (true f has max |.| = 16)
 
 <p><span class="mono">n−1</span> 件の事象で階数 511 の系ができ、核は 1 次元。核ベクトルの <span class="mono">q−1</span> 通りのスカラー倍を走査して最短を取ると <span class="mono">f</span> そのものが出る。512×512 のガウス消去 1 回、49 秒 ― 格子簡約も差ベクトルもなし。ここで二つの前提が崩れた: <span class="mono">Δs</span> の短さが問題だという前提と、<span class="mono">f mod q</span> から <span class="mono">f</span> への持ち上げに格子が要るという前提である。</p>
 
+<div class="note">
+<span class="eyebrow">which-call ラベル無しでも解ける</span>
+<p>オラクルは first-two 発散を教えるが、call 1 / call 2 のどちらが跨いだかは言わない（one-of-two 論理和）。公開統計では区別できず（2 署名の分類器は精度 0.50〜0.60 の偶然）、素朴な反復も収束しない。だが 2 つの候補行は <span class="mono">b = x^{n/2} a</span> の関係にあり、論理和は <span class="mono">(a·f)(a·f′) = 0</span>（<span class="mono">f′ = −x^{n/2}f</span>）― すなわち <strong>rank-2 対称行列 <span class="mono">S = sym(f f′ᵀ)</span> への線形測定</strong>になる。約 <span class="mono">n(n+1)/2</span> 事象で <span class="mono">S</span> が決まり、その列空間が厳密に <span class="mono">span{f, f′}</span>、そこから <span class="mono">f</span> を短ベクトルとして取り出す。<span class="mono">blind_solve.jl</span> はラベル無しで <span class="mono">f</span> を復元する（n = 16, 32 で 8/8）。盲目チャネルは不可能ではなく、ラベル既知の <span class="mono">O(n)</span> に対し <span class="mono">O(n²)</span> 事象（n 倍）で済む。1 ビットの不一致検出オラクルだけで鍵が出る。</p>
+</div>
+
 <h3>必要なオラクルは「窓」であり、両端とも測れる</h3>
 
 <p>このチャネルには「どのメッセージが事象だったか」を教える何かが要る。二実装の差がそれになるのは、中心への摂動が<strong>小さすぎず大きすぎない</strong>ときだけである。</p>
@@ -543,7 +548,7 @@ A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good
 <li><strong>A2a / A2b は分離できていない</strong> ― 複素除算単独と <span class="mono">D11</span> 単独はどちらも 0/10万。単独率 ≈3.75×10⁻⁶ をゼロから分けるには数百万署名が要り、そこまで到達していない。二つ合わせれば署名に届く、とは言えるが、どちらが効くかは言えない。</li>
 <li><strong>A2 と A1 の率は区別できない</strong> ― 点推定で 2.5 倍だが、92.5 万本のプールで p ≈ 0.23。順序ではなく「同程度」と報告する。</li>
 <li><strong>非対称性</strong>には機構を与えたが、較正済みの法則は与えていない ― 比の推定 3 通りが一桁にまたがり、突き合わせられていない。</li>
-<li><strong>事象チャネルは実ハッシュで通したが、盲目オラクルに残余がある。</strong><span class="mono">event_attack.jl</span> が一様近似を外し、実 <span class="mono">hash_to_point</span> 事象 511 本で復元・偽造まで届く。§05 の係数数分類も実 12 発散を 12/12 正しく分類する。閉じていないのは完全盲目の攻撃 ― first-two 発散が call-1 か call-2 か区別できず（one-of-two）、素朴な反復解法は収束しない（合成 n=64,128 で 0/5）。ラベル既知での解法は示したが、盲目のラベル復元は open。</li>
+<li><strong>事象チャネルは実ハッシュで通し、盲目も解いた。</strong><span class="mono">event_attack.jl</span> が一様近似を外し実 <span class="mono">hash_to_point</span> 事象 511 本で復元・偽造まで届く。盲目の which-call は §04 の rank-2 リフト（<span class="mono">blind_solve.jl</span>）が解く ― ラベル既知の <span class="mono">O(n)</span> に対し <span class="mono">O(n²)</span> 事象。未実施は n=512 での盲目の通し実行（約 3.3×10⁹ 事象）で、リフトは n≤32 で実証（O(n²) の線形解が唯一の理由）、代数は n=512 でも同一。</li>
 <li><strong>縮約の結果は 2 アーキだが全組合せではない。</strong>x86-64（gcc 13.3 / clang 18.1）と aarch64（gcc 13.2 / clang 18.1、<span class="mono">qemu-user</span>）で同一結果 ― gcc は縮約せず、clang は <span class="mono">-ffp-contract=fast</span> 系のみ、率も鍵復元も一致。FMA が基本 ISA の aarch64 でも既定は縮約しない（<span class="mono">fpr</span> ラッパが効く）。未検証: MSVC、他バージョン、実機 aarch64、AVX2/NEON ベクトル経路の動的比較。</li>
 <li><strong>検証の速さ</strong>は最速の C ビルドを約 10% 上回るが、これはビルドオプションだけで生じるばらつきの内側である。擁護できる主張は「C と同等」であって順位ではない。</li>
 <li><strong>FALCON-1024</strong> は書き方の差については低volume（35万本、1 件）だが、縮約の結果はここでも再現する（6万本中 6 本）。</li>
