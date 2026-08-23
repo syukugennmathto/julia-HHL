@@ -67,7 +67,13 @@ fresh message that the victim's public key accepts. Universal forgery, at a
 cost of ≈ 1.3 × 10⁴ messages. The remaining 4 are
 divergences at the first two calls — the channel above — and the result
 replicates at n = 1024 and, under emulation, on aarch64 (same rate, same
-recovery), so it is not an x86 artefact. `-Ofast` and `-ffast-math` imply the flag. The negative
+recovery), so it is not an x86 artefact; and the reference's own documented `FALCON_FMA`
+option produces the same divergence at a rate (2⁻¹³·²) some 2²⁷ times higher than
+the "< 2⁻⁴⁰, safe and interoperable" its `config.h` claims for it. No shipped
+build enables contraction today — the threat is latent, guarded only by the
+reference's emulation default and a security warning, not by the specification —
+which is precisely why FIPS 206 should forbid contraction normatively before
+native-FP builds proliferate. `-Ofast` and `-ffast-math` imply the flag. The negative
 control matters as much: nine ordinary configurations — two compilers, native
 against emulated floating point, baseline against `-march=native`, and the
 reference's separate hand-vectorised AVX2 code path — are byte-identical over
@@ -216,7 +222,12 @@ for this particular question.
    purpose is type safety and which blocks contraction as a side effect nobody
    recorded. The whole result replicates on aarch64 under `qemu-user` (§6.7):
    same contraction pattern, same divergence rate, same recovery — the hazard is
-   architecture-independent.
+   architecture-independent. The reference's own documented `FALCON_FMA` option
+   produces the same divergence at `2⁻¹³·²` per signature, against the `< 2⁻⁴⁰`
+   its `config.h` claims. No shipped build enables contraction today
+   (`docs/fp_contract_in_the_wild.md`): the threat is latent, and the protection
+   is the reference's emulation default and warning, not the specification —
+   which is the argument for fixing it in FIPS 206 now.
 8. **An honest three-way performance comparison** (§9) against a range of C
    builds (two compilers, three optimization levels, emulated and native
    floating point) and the Python reference, reported as distributions rather
@@ -1030,11 +1041,11 @@ signatures each:
 |:--|:--|
 | `gcc -O2` native double | |
 | `gcc -O2 -march=native` | **all eight** |
-| `gcc` AVX2 code path (`-DFALCON_AVX2=1`) | **byte-identical** |
+| `gcc` AVX2 path (`-DFALCON_AVX2=1`, `FALCON_FMA` off) | **byte-identical** |
 | `gcc -O2` emulated FP | **to each other** |
 | `gcc -march=native` emulated FP | |
 | `clang -O2` native double | |
-| `clang` AVX2 code path | |
+| `clang` AVX2 path (`FALCON_FMA` off) | |
 | `clang -O2` emulated FP | |
 | `gcc` AVX2 path with `-ffp-contract=fast` | |
 | `clang -O2 -march=native -ffp-contract=fast` | **a second stream** |
@@ -1042,7 +1053,8 @@ signatures each:
 
 Two compilers, native against emulated floating point, baseline against
 `-march=native`, and the reference's separate hand-vectorised AVX2
-implementation of the FFT — all agree bit for bit. (We checked that the AVX2
+implementation of the FFT (with `FALCON_FMA` off) — all agree bit for bit.
+(Turning the reference's own `FALCON_FMA` on is the exception, treated above.) (We checked that the AVX2
 builds really contain the vector path rather than silently falling back: 599
 `ymm` instructions under GCC and 4321 under clang.) The emulated build agreeing
 with the native one is worth noting on its own: the reference's `config.h`
@@ -1079,6 +1091,44 @@ message indices *identical* to the x86 run — and the low-index pairs recover t
 key and forge exactly as before (3 of 5 sampled pairs, each accepted by the
 public key). So the hazard is architecture-independent: the same single flag,
 the same rate, the same recovery, on a second ISA (`scripts/cref_contract_aarch64.sh`).
+
+**And it is not only a compiler flag: the reference ships the switch itself.**
+The AVX2 path has a first-class build option, `FALCON_FMA`, which replaces the
+two-rounding `_mm256_mul_pd`/`_mm256_add_pd` with a real `_mm256_fmadd_pd`. It is
+documented, and `config.h` assesses its risk in its own words:
+
+> "setting this option will slightly modify the values of expanded private keys,
+> but will normally not change the values of non-expanded private keys, public
+> keys or signatures, for a given keygen/sign seed (non-expanded private keys and
+> signatures might theoretically change, but only with low probability, less than
+> 2^(-40); produced signatures are still safe and interoperable)."
+
+We built the reference both ways (`FALCON_FPNATIVE=1 FALCON_AVX2=1`, with and
+without `FALCON_FMA=1`) on AVX2+FMA hardware and signed 274944 messages under one
+key on a deterministic tape (`scripts/falcon_fma.sh`). The signatures differ on
+**30 of them — a rate of 1.09 × 10⁻⁴, i.e. 2⁻¹³·²** — and the divergent pairs
+recover the key and forge exactly as the compiler-contraction pairs do. The
+reference's estimate for this event is `< 2⁻⁴⁰ ≈ 9 × 10⁻¹³`; the measured rate is
+**about 2²⁷ (eight decimal orders) larger**, and each event is a key recovery,
+not a benign re-rounding. "Produced signatures are still safe and interoperable"
+is the precise claim this paper refutes: two signatures on one message, one from
+each build, are safe *individually* and catastrophic *together*, because their
+difference is the key. The danger is a documented option the reference offers and
+under-rates in its own configuration file.
+
+**No shipped build enables it today — which is the point.** A survey of the
+deployed ecosystem (`docs/fp_contract_in_the_wild.md`) finds *no* current
+non-test build of Falcon that contracts on an FMA-capable target: liboqs,
+PQClean, the Rust bindings, Bouncy Castle and the distributions are all
+protected — by integer emulation (`FALCON_FPEMU`; PQClean's `clean` uses
+`uint64_t fpr` with no `double` at all), by the hand-written two-rounding AVX2
+intrinsics (`FALCON_FMA` off), or by a language that does not fuse (Java).
+OpenSSL 3.5, AWS-LC, Botan, CIRCL and the Go standard library do not ship Falcon
+at all yet. So the threat is **latent, not active** — the protection rests
+entirely on the reference's `FPEMU` default, its intrinsics, its `fpr` wrapper
+and its security warning, none of which is in the specification. That is exactly
+the state in which a standard should act: before FIPS 206's push toward
+native-FP, bit-exact implementations turns a latent hazard into a shipped one.
 
 **The window discriminates, which is the point of measuring it.** §6.6 put a
 two-sided condition on when an implementation difference is an oracle for the
@@ -1770,7 +1820,13 @@ If FIPS 206 requires bit-exact KAT agreement, then:
    not a specification. A standard must state `#pragma STDC FP_CONTRACT OFF`
    (or an equivalent normative prohibition), because no amount of care in
    *writing* the reference pins this and the current protection is undocumented
-   even in the reference itself.
+   even in the reference itself. The reference goes further than leaving it to a
+   flag: it ships an explicit `FALCON_FMA` option and rates its risk, in
+   `config.h`, at `< 2⁻⁴⁰`, "still safe and interoperable." We measure that
+   option's signature-change rate at `2⁻¹³·²` — about `2²⁷` too optimistic — and
+   every change is a key recovery. A standard cannot leave FMA to a build option
+   an implementer will read that assessment of; it must forbid contraction
+   normatively.
 4. **Say whether the floating-point environment is in scope.** §7.3 shows a
    signer that is conforming in every respect except the ambient IEEE-754
    rounding direction emits signatures that **fail verification** — 0 of 200
@@ -1948,6 +2004,7 @@ runs unless a measurement asks otherwise.
 | **the oracle window, all four ends** (§6.6) | `julia --project=falcon falcon/scripts/window.jl all 200 1200` |
 | **event channel end-to-end, real hashes** (§6.5) | `julia --project=falcon falcon/scripts/event_attack.jl` |
 | **cross-arch: aarch64 under QEMU** (§6.7) | `sh falcon/scripts/cref_contract_aarch64.sh 150000` |
+| **the reference's own FALCON_FMA option** (§6.7) | `sh falcon/scripts/falcon_fma.sh 300000` |
 | the one-bit oracle's noise (§6.6) | `julia --project=falcon falcon/scripts/window.jl noise 10 150000` |
 | **two builds of the C reference, end to end** (§6.7) | `sh falcon/scripts/cref_contract.sh 100000` |
 | rounding mode invalidates signatures (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |

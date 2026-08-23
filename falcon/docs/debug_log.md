@@ -5465,6 +5465,75 @@ first-two 発散は call-1 か call-2 か**区別できない**（1 発散＝2 �
 
 ---
 
+## [2026-08-23] #074 ★★★ 参照実装自身の FALCON_FMA を測った ― config.h の「< 2^-40」は 2^27 甘い
+
+- **モジュール**: scripts/falcon_fma.sh（新規）/ docs/fp_contract_in_the_wild.md（Deep Research の記録）
+- **再現条件**: `sh falcon/scripts/falcon_fma.sh 300000`（AVX2+FMA ホスト）
+
+### 狙い
+
+ユーザの Deep Research: **実運用で -ffast-math 等で建てている Falcon は無い**
+（liboqs/PQClean は整数エミュか明示 AVX2 intrinsics、Java は融合しない）。
+＝脅威は潜在的。だが報告が拾った鍵: 参照実装は **FALCON_FMA という明示オプション**を
+持ち、config.h が「署名が変わるのは < 2^-40、safe and interoperable」と自己評価する。
+これは本稿の主張そのものを参照実装が書いて、握りつぶしている。**測る。**
+
+### 一次情報の確認（vendored cref で逐語照合）
+
+- `inner.h:108` `#define FMADD(a,b,c) _mm256_fmadd_pd(a,b,c)`（FALCON_FMA 有効時）、
+  `:111` 既定は `_mm256_add_pd(_mm256_mul_pd(a,b),c)`（2 回丸め）。`:278` 既定 0。
+- `config.h:124-134`（逐語）: "…signatures might theoretically change, but only
+  with low probability, **less than 2^(-40)**; produced signatures are still
+  **safe and interoperable**."
+
+### 事実 ― 実測は 2^-13.2、参照の見積りより 2^27 大きい
+
+`-DFALCON_FPNATIVE=1 -DFALCON_AVX2=1` を FALCON_FMA 有無で 2 通り、同一鍵・
+同一メッセージ・決定的テープで 274944 本：
+
+```
+fma build: 32 fma insns ; default: 0 ; 両者とも privkey fnv 39afef910dae5682
+FALCON_FMA=1 vs default : 30 / 274944 differ = 1.09e-4 = 2^-13.2
+config.h の見積り: < 2^-40 = 9e-13
+```
+
+**参照実装は自分のオプションの署名変化確率を約 8 桁（2^27）過小評価している。**
+しかも発散ペアは鍵を出す: index 23215/23823 で KEY RECOVERED＋偽造受理、
+4808/38958 は first-two。「safe and interoperable」は**個別には**真、
+**2 本揃うと**偽 ― 差が鍵だから。
+
+### 外した仮説
+
+- **「AVX2 経路は縮約されないので安全（#071 の陰性対照でそう置いた）」。**
+  半分正しい: **コンパイラは**縮約しない（intrinsics だから）。だが**参照自身の
+  FALCON_FMA スイッチ**が `_mm256_fmadd_pd` を出す。#071 の AVX2 陰性対照は
+  FALCON_FMA を立てずに測っていた。立てると発散する。陰性対照の条件を
+  「FALCON_FMA オフの AVX2」に限定して書き直す必要がある（§6.7 は intrinsics が
+  既定で縮約対象外、と正しく書いてあるが、FALCON_FMA を別項目として立てた）。
+
+### 帰結（脅威モデルの更新）
+
+脅威は**潜在的**（現状どの出荷ビルドも縮約しない）。だがそれは仕様書のおかげでなく、
+参照の (a) FPEMU 既定 (b) 明示 intrinsics (c) fpr ラッパ (d) CRITICAL WARNING の
+4 つのおかげ。どれも規範ではない。FIPS 206 が native-FP・bit 一致へ動く今こそ
+規範で禁じるべき、という §13 の主張が強くなった。残余の実運用リスクは
+「ラッパ無し native-double port ＋ 縮約」（aarch64 の素の GCC を含む）。
+
+### 回帰テスト
+
+`scripts/falcon_fma.sh` が再現手順。`docs/fp_contract_in_the_wild.md` に
+プロジェクト別評価表と一次引用を保存。
+
+### 学び
+
+- **「効かない」の陰性対照は、条件を厳密に書く。** #071 の「AVX2 は安全」は
+  「FALCON_FMA オフなら」の限定付きだった。参照が用意したスイッチを見落とすと
+  陰性対照が過大主張になる。
+- **相手が自分で書いて握りつぶした主張は、最良の攻め所。** config.h の 2^-40 は
+  測れば 2^-13。数字で示せば「safe and interoperable」の反証になる。
+
+---
+
 ## 完了時点のまとめ
 
 モジュール 1〜10 すべて実装・テスト合格（**17926 件**、実行約 2 分）。

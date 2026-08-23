@@ -1,0 +1,25 @@
+# FALCON_FMA: the reference's own documented build option, measured
+# host x86-64 with AVX2+FMA; gcc -O2 -march=native -DFALCON_FPNATIVE=1 -DFALCON_AVX2=1
+# fma build adds -DFALCON_FMA=1 (uses _mm256_fmadd_pd); default uses
+# _mm256_mul_pd + _mm256_add_pd (two roundings).
+
+fma-build FMA instructions: 32   default-build: 0
+both builds: privkey fnv 39afef910dae5682 (identical key from the seed)
+
+## divergence rate (same key, same messages, deterministic per-message tape)
+FALCON_FMA=1 vs default : 30 of 274944 differ  (rate 1.09e-4 = 2^-13.2)
+
+## the reference's own estimate, config.h lines 124-134, verbatim:
+#   "non-expanded private keys and signatures might theoretically change, but
+#    only with low probability, less than 2^(-40); produced signatures are
+#    still safe and interoperable."
+# measured 2^-13.2 vs stated < 2^-40 : the reference underestimates its own
+# option's signature-change probability by ~27 bits (~8 decimal orders),
+# and every change is a key-recovery event, not a benign one.
+
+## key recovery on FALCON_FMA pairs (indices 4808, 23215, 23823, 38958)
+  message 4808  : 1023/1024 differ -> first-two divergence (section 6.5 channel)
+  message 23215 :  966/1024 differ -> KEY RECOVERED (a,b)=(-2,1), forged, pubkey ACCEPTS
+  message 23823 :  916/1024 differ -> KEY RECOVERED (a,b)=(-1,0), forged, pubkey ACCEPTS
+  message 38958 : 1020/1024 differ -> first-two divergence
+  2 of 4 recovered the key and produced an accepted forgery; 2 are first-two.

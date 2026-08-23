@@ -118,11 +118,34 @@ reimplementation that does not use the wrapper — which is most of them, since
 the wrapper is a C type-safety device with no analogue in many languages —
 loses that protection without any way to know it had it.
 
+**The reference offers the switch and under-rates it.** Beyond the compiler
+flag, the reference ships an explicit `FALCON_FMA` build option (AVX2 path), and
+`config.h` (lines 124-134) assesses its risk verbatim as: signatures "might
+theoretically change, but only with low probability, less than 2^(-40); produced
+signatures are still safe and interoperable." We built the reference with and
+without `FALCON_FMA=1` on AVX2+FMA hardware and measured the signature-change
+rate at **1.09e-4 = 2^-13.2** over 274944 messages -- about 2^27 (eight decimal
+orders) higher than the stated bound -- and the divergent pairs recover the key
+and forge. "Safe and interoperable" holds for a signature in isolation; it fails
+when both builds' signatures on one message are observed, because their
+difference is the key.
+
+**No shipped build enables contraction today** (we surveyed liboqs, PQClean, the
+Rust bindings, Bouncy Castle, the distributions, and the libraries that do not
+yet ship Falcon at all). The deployed ecosystem is protected by integer
+emulation, by hand-written two-rounding AVX2 intrinsics, and by the reference's
+own warning -- none of which is in the specification. The threat is therefore
+latent, and now is the time to make the prohibition normative, before FIPS 206's
+move toward native-FP, bit-exact implementations makes it active.
+
 **Suggestion.** State normatively that contraction must be disabled (`#pragma
 STDC FP_CONTRACT OFF`, or an equivalent prohibition expressed over the affected
-expressions), rather than leaving it to a build configuration. A prohibition on
-"using FMA" that an implementer reads as "do not call `fma()`" does not cover
-the case above, in which nobody wrote `fma` anywhere.
+expressions), and that FMA must not be enabled in signing (the reference's
+`FALCON_FMA` included), rather than leaving either to a build configuration. A
+prohibition on "using FMA" that an implementer reads as "do not call `fma()`"
+does not cover the compiler-contraction case, in which nobody wrote `fma`
+anywhere; and a build option whose own documentation calls it "safe and
+interoperable" will be enabled unless the standard forbids it.
 
 ### 2. The first two sampler calls are not harmless
 
