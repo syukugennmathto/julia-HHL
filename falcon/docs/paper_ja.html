@@ -357,7 +357,14 @@ gcc default == clang default : identical over 100000 signatures
 </table>
 </div>
 
-<p><strong>12 件中 8 件 ― そして 8 件とも偽造できた。</strong>復元された鍵はいずれも保存鍵の厳密な NTRU 対称 <span class="mono">±x^k(f,g)</span> で、<span class="mono">‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822</span>。だが公開鍵関係は「<span class="mono">h</span> に対する NTRU 対のひとつ」を、ノルム条件は「十分短い」を言うだけで、<em>サンプラが回る</em>とは言っていない。そこで、使って確かめた: 復元した各 <span class="mono">(f,g)</span> について <span class="mono">fG − gF = q</span> を解いて基底を完成させ（鍵生成が回すのと同じ降下で、攻撃者が持っていないものは要らない）、被害者が署名していないメッセージに署名し、被害者の公開鍵に出す。<strong>8 件中 8 件が受理される。</strong>署名 2 本からの<strong>万能偽造</strong>である。率が費用を決める: 鍵を渡す発散は 10 万本中 8 本なので、両ビルドの署名を同じメッセージで取れる攻撃者に必要なのは<strong>約 1.3×10⁴ メッセージ</strong>、そのあとは 40×40 の探索だけ。残る 4 件は §04 のチャネルそのもの: <span class="mono">Δz</span> が 2-疎でないことを厳密除算の失敗が証明し、内部の整数中心は 1.02×10⁸ 回引いて 0 件だった。差の係数数がきれいに分かれるので、攻撃者は 2 つのチャネルを区別できる。4/12 という比は、まったく別の摂動源であるにもかかわらず同論文 Table 2 の 30/70 に近い。FALCON-1024 でも再現する ― 6 万本中 6 本。</p>
+<p><strong>12 件中 8 件 ― そして 8 件とも偽造できた。</strong>復元された鍵はいずれも保存鍵の厳密な NTRU 対称 <span class="mono">±x^k(f,g)</span> で、<span class="mono">‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822</span>。だが公開鍵関係は「<span class="mono">h</span> に対する NTRU 対のひとつ」を、ノルム条件は「十分短い」を言うだけで、<em>サンプラが回る</em>とは言っていない。そこで、使って確かめた: 復元した各 <span class="mono">(f,g)</span> について <span class="mono">fG − gF = q</span> を解いて基底を完成させ（鍵生成が回すのと同じ降下で、攻撃者が持っていないものは要らない）、被害者が署名していないメッセージに署名し、被害者の公開鍵に出す。<strong>8 件中 8 件が受理される。</strong>署名 2 本からの<strong>万能偽造</strong>である。率が費用を決める: 鍵を渡す発散は 10 万本中 8 本なので、両ビルドの署名を同じメッセージで取れる攻撃者に必要なのは<strong>約 1.3×10⁴ メッセージ</strong>、そのあとは 40×40 の探索だけ。残る 4 件は §04 のチャネルそのもの: <span class="mono">Δz</span> が 2-疎でないことを厳密除算の失敗が証明し、内部の整数中心は 1.02×10⁸ 回引いて 0 件だった。差の係数数がきれいに分かれるので、攻撃者は 2 つのチャネルを区別できる。4/12 という比は、まったく別の摂動源であるにもかかわらず同論文 Table 2 の 30/70 に近い。FALCON-1024 でも再現する ― 6 万本中 6 本。<strong>x86 の特殊事情でもない</strong>: クロスツールチェインと <span class="mono">qemu-user</span> で aarch64 でも再実行した。実 <span class="mono">fft.c</span> は同じフラグでだけ縮約し（gcc は決してせず、clang は <span class="mono">-ffp-contract=fast</span>/<span class="mono">-Ofast</span>/<span class="mono">-ffast-math</span> のみ）、FMA が基本 ISA でも <span class="mono">fpr</span> ラッパが止めるので既定は縮約しない。エミュレーション下で <strong>15 万本中 19 本（1.27×10⁻⁴）</strong>発散、最初の 12 メッセージは x86 と同一、ペアから鍵と偽造が出る。危険はアーキ非依存である。</p>
+
+<p><strong>スイッチは参照実装自身が用意し、過小評価している。</strong> AVX2 経路には <span class="mono">FALCON_FMA</span> という明示オプションがあり、真の <span class="mono">_mm256_fmadd_pd</span> を出す。<span class="mono">config.h</span> はその危険を「署名が変わるのは < 2⁻⁴⁰、safe and interoperable」と自己評価する。AVX2+FMA 機で有無 2 通りに建て同一鍵で 274,944 本署名すると <strong>30 本＝ 2⁻¹³·²</strong> で食い違い、参照の見積りより約 2²⁷ 高く、発散ペアから鍵と偽造が出る。「safe and interoperable」は署名 1 本では真、両ビルドの 2 本を並べると偽 ― 差が鍵だから。本稿の主張が参照実装の設定ファイルに書かれ、握りつぶされている。</p>
+
+<div class="note">
+<span class="eyebrow">今、実際に危険なのか</span>
+<p>いいえ ― だからこそ今動くべきである。出荷エコシステムを調べた限り、FMA 可能ターゲットで縮約する Falcon ビルドは<em>存在しない</em>: liboqs・PQClean は整数エミュか手書きの 2 回丸め AVX2 intrinsics、Bouncy Castle は Java、OpenSSL 3.5・AWS-LC・Botan・CIRCL・Go は Falcon 自体を出荷していない。脅威は<strong>潜在的</strong>で、参照の FPEMU 既定・intrinsics・<span class="mono">fpr</span> ラッパ・警告だけが防いでいる ― どれも仕様書にはない。FIPS 206 が native-FP・bit 一致へ動くことこそ潜在を顕在に変える圧力なので、その前に規範で禁じるべきである。</p>
+</div>
 
 <h3>陰性対照が価値の半分である</h3>
 
@@ -536,8 +543,8 @@ A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good
 <li><strong>A2a / A2b は分離できていない</strong> ― 複素除算単独と <span class="mono">D11</span> 単独はどちらも 0/10万。単独率 ≈3.75×10⁻⁶ をゼロから分けるには数百万署名が要り、そこまで到達していない。二つ合わせれば署名に届く、とは言えるが、どちらが効くかは言えない。</li>
 <li><strong>A2 と A1 の率は区別できない</strong> ― 点推定で 2.5 倍だが、92.5 万本のプールで p ≈ 0.23。順序ではなく「同程度」と報告する。</li>
 <li><strong>非対称性</strong>には機構を与えたが、較正済みの法則は与えていない ― 比の推定 3 通りが一桁にまたがり、突き合わせられていない。</li>
-<li><strong>事象チャネルは両端を測ったが、両端をつないでは走らせていない。</strong>§04 が解法、§05 がオラクルだが、合成は算術である ― 情報のある事象が 1 問い合わせあたり 3.3×10⁻⁵ なので、511 行には約 1.5×10⁷ 組、丸一日規模が要り、そこは払っていない。§04 はシンドロームをハッシュでなく一様に引いてもいる。</li>
-<li><strong>縮約の結果は 1 台のマシン、1 組のコンパイラである。</strong>aarch64（FMA が基本 ISA にある）も MSVC も他のバージョンも試していない。<span class="mono">fpr</span> ラッパが縮約を止めるのが頑健なのか、この 2 バージョンの偶然なのかは、より広い調査でしか言えない。</li>
+<li><strong>事象チャネルは実ハッシュで通したが、盲目オラクルに残余がある。</strong><span class="mono">event_attack.jl</span> が一様近似を外し、実 <span class="mono">hash_to_point</span> 事象 511 本で復元・偽造まで届く。§05 の係数数分類も実 12 発散を 12/12 正しく分類する。閉じていないのは完全盲目の攻撃 ― first-two 発散が call-1 か call-2 か区別できず（one-of-two）、素朴な反復解法は収束しない（合成 n=64,128 で 0/5）。ラベル既知での解法は示したが、盲目のラベル復元は open。</li>
+<li><strong>縮約の結果は 2 アーキだが全組合せではない。</strong>x86-64（gcc 13.3 / clang 18.1）と aarch64（gcc 13.2 / clang 18.1、<span class="mono">qemu-user</span>）で同一結果 ― gcc は縮約せず、clang は <span class="mono">-ffp-contract=fast</span> 系のみ、率も鍵復元も一致。FMA が基本 ISA の aarch64 でも既定は縮約しない（<span class="mono">fpr</span> ラッパが効く）。未検証: MSVC、他バージョン、実機 aarch64、AVX2/NEON ベクトル経路の動的比較。</li>
 <li><strong>検証の速さ</strong>は最速の C ビルドを約 10% 上回るが、これはビルドオプションだけで生じるばらつきの内側である。擁護できる主張は「C と同等」であって順位ではない。</li>
 <li><strong>FALCON-1024</strong> は書き方の差については低volume（35万本、1 件）だが、縮約の結果はここでも再現する（6万本中 6 本）。</li>
 </ul>
