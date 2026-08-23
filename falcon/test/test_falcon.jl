@@ -346,6 +346,53 @@
         end
     end
 
+    @testset "blind which-call solve: rank-2 lift recovers f without labels" begin
+        # docs/debug_log.md #075, docs/paper.md sec 6.6.  The first-two event
+        # channel with UNKNOWN which-call label: each event gives one of two rows
+        # a=form_row(c,k1), b=form_row(c,k2), one satisfying row.f=0.  Since
+        # b = x^{n/2} a, the disjunction is (a.f)(a.f')=0 with f'=-x^{n/2}f, a
+        # linear measurement on the rank-2 S=sym(f f'^T).  Checked at n=16 with a
+        # fixed seed: S is pinned (kernel dim 1) and its column space contains f.
+        qq = 12289
+        nn = 16; k1 = nn ÷ 2 - 1; k2 = nn - 1; Dd = nn*(nn+1) ÷ 2
+        rng = MersenneTwister(20260823)
+        fsec = Int[rand(rng, -5:5) for _ in 1:nn]; fsec[1] = fsec[1] == 0 ? 1 : fsec[1]
+        shp(v, m) = Int[(i = j - m; i >= 0 ? v[i+1] : -v[i+nn+1]) for j in 0:nn-1]
+        fp = mod.(-shp(fsec, nn ÷ 2), qq)
+        frw(c, k) = Int[(i = k - j; mod(i >= 0 ? c[i+1] : -c[i+nn+1], qq)) for j in 0:nn-1]
+        sm(a) = (o = Int[]; for i in 1:nn, j in i:nn; push!(o, i==j ? mod(a[i]*a[j], qq) : mod(2*a[i]*a[j], qq)); end; o)
+        function rrefq(M0)
+            M = [mod(x, qq) for x in M0]; rows, cols = size(M); piv = Int[]; r = 1
+            for col in 1:cols
+                pr = findfirst(i -> M[i,col] % qq != 0, r:rows); pr === nothing && continue; pr += r - 1
+                M[r,:], M[pr,:] = M[pr,:], M[r,:]; iv = invmod(M[r,col], qq); M[r,:] = mod.(M[r,:] .* iv, qq)
+                for i in 1:rows; i == r && continue; fc = M[i,col]; fc == 0 && continue; M[i,:] = mod.(M[i,:] .- fc .* M[r,:], qq); end
+                push!(piv, col); r += 1; r > rows && break
+            end
+            M, piv
+        end
+        meas = Vector{Int}[]
+        for _ in 1:Int(round(1.6*Dd))
+            k = rand(rng, (k1, k2)); c = Int[rand(rng, 0:qq-1) for _ in 1:nn]
+            row = frw(c, k); sv = mod(sum(row[j]*fsec[j] for j in 1:nn), qq)
+            j0 = findfirst(j -> gcd(fsec[j], qq) == 1, 1:nn); p0 = k - (j0-1)
+            if p0 >= 0; c[p0+1] = mod(c[p0+1] - sv*invmod(fsec[j0], qq), qq)
+            else; c[p0+nn+1] = mod(c[p0+nn+1] + sv*invmod(fsec[j0], qq), qq) end
+            push!(meas, sm(frw(c, k1)))          # solver only ever forms a_i (row at k1)
+        end
+        A = reduce(vcat, [reshape(r, 1, :) for r in meas])
+        R, piv = rrefq(A); free = setdiff(1:Dd, piv)
+        @test length(free) == 1                  # S pinned up to scale (kernel dim 1)
+        Svec = zeros(Int, Dd); Svec[free[1]] = 1
+        for (ri, cc) in enumerate(piv); Svec[cc] = mod(-R[ri, free[1]], qq); end
+        S = zeros(Int, nn, nn); t = 1
+        for i in 1:nn, j in i:nn; S[i,j] = Svec[t]; S[j,i] = Svec[t]; t += 1; end
+        # colspace(S) contains f  <=>  rank[S | f] == rank[S]
+        _, ps = rrefq(S); _, pa = rrefq(hcat(S, reshape(mod.(fsec, qq), nn, 1)))
+        @test length(ps) == 2                     # rank-2
+        @test length(pa) == length(ps)            # f is in the column space
+    end
+
     @testset "the FMA arm, and the parity that closes the first two calls" begin
         # docs/debug_log.md #070, docs/paper.md sec 6.6.
         #

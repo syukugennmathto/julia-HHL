@@ -52,7 +52,9 @@ Two further results concern the sampler calls that 2024/1709 dismisses. First,
 the centre of the first two calls is exactly `(c·f)_{n/2−1}/q` — a **public
 linear form in the secret** — so an integer centre there is one `F_q` equation
 on `f`; from `n−1` such **events**, with no signature difference vectors and no
-lattice reduction, a 512 × 512 Gaussian elimination returns the private key,
+lattice reduction, a 512 × 512 Gaussian elimination returns the private key
+(and even blind — without knowing which of the two first calls straddled — a
+rank-2 symmetric lift recovers it at an n-fold query overhead),
 which we run. That paper dismisses those positions because the difference vector
 is not short enough, a reason this channel does not depend on. Second, the
 oracle such a channel needs exists exactly inside a two-sided window on the
@@ -201,7 +203,9 @@ for this particular question.
    message the victim's public key accepts (§6.5, `event_attack.jl`). 2024/1709 §5 dismisses these
    positions on the grounds that the difference vector is not short enough; the
    channel never reads the difference vector, so the objection does not reach
-   it. The channel also needs strictly less of an adversary: one bit per query.
+   it. The channel also needs strictly less of an adversary: one bit per query — and
+   even *blind*, without the which-call label, the key is recoverable by a rank-2
+   symmetric lift (§6.6, `blind_solve.jl`) at an `n`-fold query overhead.
 6. **The oracle that channel needs, as a measured two-sided window** (§6.6). An
    implementation difference is an oracle for the event exactly when its
    perturbation exceeds the *shared* rounding error (below which the two
@@ -778,6 +782,44 @@ say so rather than implying we did. The oracle that tells an adversary *which*
 messages produced an event is exactly what §6.4 flags as missing; §6.6 supplies
 the two-sided condition for one to exist, measures both sides, and identifies a
 difference that meets it.
+
+**The blind disjunction, and how it is solved.** §6.5 and `event_attack.jl`
+assume the event *label* — which of call 1 (index `n/2−1`) or call 2 (index
+`n−1`) straddled. A cross-build oracle does not hand that over: it flags a
+first-two divergence and no more, leaving a one-of-two disjunction per event,
+`(a_i·f) = 0` or `(b_i·f) = 0` with `a_i = form_row(c_i, n/2−1)` and
+`b_i = form_row(c_i, n−1)`. Two things make this look hard. No public statistic
+separates the two calls: over 150 labelled divergences of each type we found the
+best single-feature classifier on `(Δs₁, Δs₂)` at chance, 0.50–0.60, because
+both calls desync at the very start of a 1024-call descent so the downstream is
+equally scrambled. And naive iterative labelling (EM) does not converge (0 of 5
+at n = 64, 128), because a mostly-wrong labelling yields a meaningless kernel
+that gives the relabelling no gradient.
+
+It is nonetheless solvable, by using a structure the two rows share:
+`b_i = x^{n/2} a_i`, so `b_i·f = a_i·f'` with `f' = −x^{n/2} f` a fixed shift of
+the secret. The disjunction becomes `(a_i·f)(a_i·f') ≡ 0`, i.e.
+
+    a_iᵀ S a_i ≡ 0   (mod q),   S = sym(f f'ᵀ),   rank ≤ 2,
+
+a **linear** measurement on a rank-2 symmetric matrix. Collecting
+`M ≈ n(n+1)/2` events pins `S` (kernel dimension 1), and its column space is
+exactly `span{f, f'}`, from which `f` is the short vector — a two-dimensional
+lattice extraction. `scripts/blind_solve.jl` runs the whole pipeline on
+synthetic events with the real `q`, and recovers `f` **with no label
+information**: 7/8 at n = 8, 8/8 at n = 16, 8/8 at n = 32, at `M = 1.4·n(n+1)/2`.
+The algebra is identical at n = 512; only the `O(n²)` linear solve keeps the
+demonstration at small `n`.
+
+The consequence is a query-cost law, not an impossibility. The *labelled*
+channel (§6.5) needs `O(n)` events; the *blind* channel needs `O(n²)` — an
+`n`-fold overhead. At n = 512 that is ≈ 1.3 × 10⁷ first-two events labelled
+against ≈ 3.3 × 10⁹ blind. Expensive, but polynomial: a fault-detection oracle
+that leaks only "the two redundant computations disagreed" — one bit, no
+signatures, no labels — still yields the key. This is the strongest form of the
+§6.5 channel, and it is why "the first two calls give only a short lattice
+vector" is not a reason to leave them unprotected: they give a *linear* channel,
+blind or not.
 
 ### 6.6 The oracle the event channel needs: a window, and a compiler flag inside it
 
@@ -1743,15 +1785,13 @@ general lattice-signature guideline.
    a residual.** `scripts/event_attack.jl` removes §6.5's uniform-syndrome
    idealization — it solves and forges from 511 real `hash_to_point` events (rate
    1.65 × 10⁻⁴, matching `2/q`) — and §6.7's coefficient-count classifier labels
-   the real cross-build divergences perfectly (12 of 12). What is *not* closed in
-   one run is the fully blind attack: the cross-build oracle flags a first-two
-   divergence but not which of call 1 / call 2 straddled (a one-of-two
-   disjunction), and naive iterative solving does not resolve it (0 of 5
-   synthetic trials at n = 64, 128). Collecting 511 rows through the oracle at
-   its natural first-two rate (≈ 4 × 10⁻⁵ per message) would also need ≈ 1.3 ×
-   10⁷ signature pairs, which we did not run. So the solve is demonstrated on
-   real syndromes with known labels; blind label recovery is an open problem we
-   state rather than claim.
+   the real cross-build divergences perfectly (12 of 12). The blind case — the oracle flags a
+   first-two divergence but not which call straddled — is *solved* by the rank-2
+   lift of §6.6 (`blind_solve.jl`), at an `O(n²)`-event cost against the `O(n)`
+   of the labelled case; what we have *not* done is run the blind pipeline
+   end-to-end at n = 512, where that is ≈ 3.3 × 10⁹ events. The lift is
+   demonstrated at n ≤ 32 (the `O(n²)` linear solve is the only reason); the
+   n = 512 algebra is identical but the run was not performed here.
 6. **The contraction result covers two architectures, not the whole matrix.**
    §6.7 builds and diffs the C reference on x86-64 (gcc 13.3, clang 18.1) and on
    aarch64 (gcc 13.2, clang 18.1) under `qemu-user`, with identical results: gcc
@@ -2006,6 +2046,7 @@ runs unless a measurement asks otherwise.
 | **cross-arch: aarch64 under QEMU** (§6.7) | `sh falcon/scripts/cref_contract_aarch64.sh 150000` |
 | **the reference's own FALCON_FMA option** (§6.7) | `sh falcon/scripts/falcon_fma.sh 300000` |
 | the one-bit oracle's noise (§6.6) | `julia --project=falcon falcon/scripts/window.jl noise 10 150000` |
+| **blind which-call solve (rank-2 lift)** (§6.6) | `julia --project=falcon falcon/scripts/blind_solve.jl` |
 | **two builds of the C reference, end to end** (§6.7) | `sh falcon/scripts/cref_contract.sh 100000` |
 | rounding mode invalidates signatures (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
 | the attack-family ceiling (§7.3) | `julia --project=falcon falcon/scripts/rounding_attack.jl 20 2400 1022` |
