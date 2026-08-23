@@ -66,7 +66,8 @@ key** — each an exact NTRU symmetry of the stored one, and each used to sign a
 fresh message that the victim's public key accepts. Universal forgery, at a
 cost of ≈ 1.3 × 10⁴ messages. The remaining 4 are
 divergences at the first two calls — the channel above — and the result
-replicates at n = 1024. `-Ofast` and `-ffast-math` imply the flag. The negative
+replicates at n = 1024 and, under emulation, on aarch64 (same rate, same
+recovery), so it is not an x86 artefact. `-Ofast` and `-ffast-math` imply the flag. The negative
 control matters as much: nine ordinary configurations — two compilers, native
 against emulated floating point, baseline against `-march=native`, and the
 reference's separate hand-vectorised AVX2 code path — are byte-identical over
@@ -189,7 +190,9 @@ for this particular question.
    `(c·f)_{n/2−1}/q`, so an integer centre there is one `F_q`-linear equation on
    `f` with coefficients the adversary computes from the message. From `n−1`
    such events we recover the key by Gaussian elimination — no difference
-   vectors, no lattice reduction, 49 seconds. 2024/1709 §5 dismisses these
+   vectors, no lattice reduction, 49 seconds — and on *real* `hash_to_point`
+   syndromes (not uniform ones) the same pipeline recovers the key and forges a
+   message the victim's public key accepts (§6.5, `event_attack.jl`). 2024/1709 §5 dismisses these
    positions on the grounds that the difference vector is not short enough; the
    channel never reads the difference vector, so the objection does not reach
    it. The channel also needs strictly less of an adversary: one bit per query.
@@ -211,7 +214,9 @@ for this particular question.
    the NIST reference, two `make` invocations apart. It also identifies what
    currently prevents it — the `fpr` struct wrapper of `fpr.h`, whose stated
    purpose is type safety and which blocks contraction as a side effect nobody
-   recorded.
+   recorded. The whole result replicates on aarch64 under `qemu-user` (§6.7):
+   same contraction pattern, same divergence rate, same recovery — the hazard is
+   architecture-independent.
 8. **An honest three-way performance comparison** (§9) against a range of C
    builds (two compilers, three optimization levels, emulated and native
    floating point) and the Python reference, reported as distributions rather
