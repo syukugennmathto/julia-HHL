@@ -737,8 +737,24 @@ Two assumptions we had carried, and lost:
   itself needs a lattice lift. It does not: the kernel is one-dimensional and
   `‖f‖ ≪ q`, so the lift is a scan over `q−1` scalars, not a short-vector problem.
 
-**What this does not establish.** It establishes the solve, not the oracle. The
-script draws the syndromes uniformly rather than hashing messages — justified by
+**Removing the uniform-syndrome idealization.** The paragraph below noted that
+`event_solve.jl` draws syndromes uniformly. `scripts/event_attack.jl` removes
+that: it scans real `hash_to_point(message, salt)` outputs, exactly what a
+signer produces, and collects the real events `(c·f)_{n/2−1} ≡ 0` (call 1) and
+`(c·f)_{n−1} ≡ 0` (call 2) — both linear in `f`, so a mix stacks into one system.
+Over 3.09 × 10⁶ real syndromes it collected 236 call-1 and 275 call-2 events
+(rate 1.65 × 10⁻⁴, matching `2/q = 1.63 × 10⁻⁴`), reached rank 511, recovered
+`f`, completed the trapdoor basis, signed a fresh message and had the victim's
+public key **accept it**. The one idealization that remains is the event *label*:
+the cross-build oracle of §6.7 flags a first-two divergence but not which of the
+two calls straddled — a one-of-two disjunction. We tried to resolve it blindly
+(iterative reweighted solving) and it does not converge, so we report it as an
+open problem rather than claim it; §6.7's coefficient-count classifier does
+separate first-two from last-two divergences perfectly (12 of 12 on the real
+data), which is what feeds the solve.
+
+**What this does not establish.** It establishes the solve, not the blind oracle.
+`event_solve.jl` draws the syndromes uniformly rather than hashing messages — justified by
 `hash_to_point`'s output being uniform, and by the measured first-two event rate
 matching the prediction (2.08 × 10⁻⁴ observed against 1.63 × 10⁻⁴ predicted,
 `scripts/first_two_probe.jl`) — but we did not re-run it with real hashes, and we
@@ -1042,6 +1058,22 @@ path the compiler chose to contract.
 
 **It replicates at FALCON-1024**: 6 of 60000, rate 1.0 × 10⁻⁴, with both builds
 again producing the identical key from the identical seed.
+
+**It is not an x86 artefact either.** We re-ran the whole experiment for aarch64
+with a cross toolchain and `qemu-user`. The static picture is identical to
+x86-64 on the real `fft.c`: GCC emits no FMA at any flag, and clang contracts
+only at `-ffp-contract=fast` (34 instructions), `-Ofast` (36) and `-ffast-math`
+(38). (A tempting shortcut misleads here: the isolated probe `a*b − c*d` through
+the `fpr` wrapper *does* contract under aarch64 GCC `-O2`, because FMA is base
+ISA — but the real macro's intermediate `fpr` variables block it, so the
+reference itself is protected. The claim has to be checked on the real
+translation unit, not the probe.) Dynamically, under emulation, the contracting
+clang build diverges from the default clang build on **19 of 150000 signatures
+(1.27 × 10⁻⁴)** — the same rate as x86-64, with the first twelve divergent
+message indices *identical* to the x86 run — and the low-index pairs recover the
+key and forge exactly as before (3 of 5 sampled pairs, each accepted by the
+public key). So the hazard is architecture-independent: the same single flag,
+the same rate, the same recovery, on a second ISA (`scripts/cref_contract_aarch64.sh`).
 
 **The window discriminates, which is the point of measuring it.** §6.6 put a
 two-sided condition on when an implementation difference is an oracle for the
@@ -1652,32 +1684,30 @@ general lattice-signature guideline.
    report is therefore not directly comparable to 2024/1709's Table 2, which
    includes first-two events; the comparison in §6 should be read with that
    caveat.
-5. **The event channel's oracle is demonstrated, its end-to-end attack is not.**
-   §6.5 runs the solve, §6.6 measures an oracle satisfying its two-sided
-   condition, and §6.7 observes four real first-two events from a contracting
-   build of the reference — but we did not run the three together: at the
-   measured 4 × 10⁻⁵ first-two events per message, collecting `n−1 = 511` rows
-   needs ≈ 1.3 × 10⁷ signature pairs, on the order of a day in this harness,
-   which we did not spend. What is
-   measured is each half; what is arithmetic is their composition. We also draw
-   syndromes uniformly rather than hashing messages (§6.5), and the ≈ 17 % of
-   oracle reports that carry no equation (§6.6) would have to be filtered — by
-   the sparsity of the difference, which is available only to an adversary who
-   sees more than the one bit the channel is claimed to need. That 17 % rests on
-   6 observed disagreements and is the loosest number in this paper. A reader should
-   treat §6.5 + §6.6 as a *channel with its two ends measured*, not as an
-   executed end-to-end key recovery.
-6. **The contraction result is one compiler pair on one machine.** §6.7 builds
-   the C reference and diffs it, which closes the gap §6.6's Julia arm left, but
-   `clang -ffp-contract=fast` against `clang` default on x86-64 is a single
-   point. We did not test aarch64 — where FMA is in the base ISA rather than
-   behind `-march=native`, so the picture could differ — nor MSVC, nor older
-   compiler versions, nor the `-mavx2` AVX2 code path of the reference, nor
-   FALCON-1024. We also did not find a *default* configuration of any compiler
-   that contracts through the `fpr` wrapper; that the wrapper blocks it may be
-   robust or may be an artefact of these two versions, and only a wider survey
-   would say. What is established is that a conforming build exists that
-   diverges, and what it costs when it does.
+5. **The event channel is composed on real syndromes, but its blind oracle has
+   a residual.** `scripts/event_attack.jl` removes §6.5's uniform-syndrome
+   idealization — it solves and forges from 511 real `hash_to_point` events (rate
+   1.65 × 10⁻⁴, matching `2/q`) — and §6.7's coefficient-count classifier labels
+   the real cross-build divergences perfectly (12 of 12). What is *not* closed in
+   one run is the fully blind attack: the cross-build oracle flags a first-two
+   divergence but not which of call 1 / call 2 straddled (a one-of-two
+   disjunction), and naive iterative solving does not resolve it (0 of 5
+   synthetic trials at n = 64, 128). Collecting 511 rows through the oracle at
+   its natural first-two rate (≈ 4 × 10⁻⁵ per message) would also need ≈ 1.3 ×
+   10⁷ signature pairs, which we did not run. So the solve is demonstrated on
+   real syndromes with known labels; blind label recovery is an open problem we
+   state rather than claim.
+6. **The contraction result covers two architectures, not the whole matrix.**
+   §6.7 builds and diffs the C reference on x86-64 (gcc 13.3, clang 18.1) and on
+   aarch64 (gcc 13.2, clang 18.1) under `qemu-user`, with identical results: gcc
+   never contracts the real `fft.c`, clang contracts only at `-ffp-contract=fast`
+   / `-Ofast` / `-ffast-math`, the divergence rate matches (1.2–1.3 × 10⁻⁴), and
+   recovery + forgery succeed on both. FMA being base-ISA on aarch64 did *not*
+   make the default build contract — the `fpr` wrapper blocks it there too. Still
+   untested: MSVC, other compiler versions, real (non-emulated) aarch64
+   hardware, and a dynamic comparison of the AVX2 / NEON vector paths. That the
+   wrapper blocks contraction at every default we tried may be robust or a
+   property of these versions; a wider survey would settle it.
 7. **A withdrawn claim.** An earlier version of this work stated that part 2 of
    the §7.1 countermeasure was undeployable, from 0 odd-norm keys in 3200. That
    was an argument from absence and it was wrong; §7.1(v) reports the
@@ -1911,6 +1941,8 @@ runs unless a measurement asks otherwise.
 | centres as a linear form in f (§6.4) | `julia --project=falcon falcon/scripts/linear_form.jl` |
 | **key recovery from events alone** (§6.5) | `julia --project=falcon falcon/scripts/event_solve.jl` |
 | **the oracle window, all four ends** (§6.6) | `julia --project=falcon falcon/scripts/window.jl all 200 1200` |
+| **event channel end-to-end, real hashes** (§6.5) | `julia --project=falcon falcon/scripts/event_attack.jl` |
+| **cross-arch: aarch64 under QEMU** (§6.7) | `sh falcon/scripts/cref_contract_aarch64.sh 150000` |
 | the one-bit oracle's noise (§6.6) | `julia --project=falcon falcon/scripts/window.jl noise 10 150000` |
 | **two builds of the C reference, end to end** (§6.7) | `sh falcon/scripts/cref_contract.sh 100000` |
 | rounding mode invalidates signatures (§7.3) | `julia --project=falcon falcon/scripts/rounding_mode.jl 15 120` |
