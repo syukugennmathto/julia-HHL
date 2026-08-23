@@ -88,6 +88,9 @@
     RCDT_PREC
 
 Precision of the reverse cumulative distribution table, in bits: 72.
+
+[Spec] Table 3.1 (p.41) is headed "scaled by a factor 2^72", and (3.33) reads
+       `chi(i) = 2^-72 * pdt[i]`.
 [Py-ref] scripts/pyref/samplerz.py:13
 """
 const RCDT_PREC = 72
@@ -143,11 +146,17 @@ separately by `samplerz`, which is why no folding happens here.
 Eighteen entries of ~72 bits: these do **not** fit in `UInt64`, and Python's
 arbitrary-precision integers hide that fact completely.  `UInt128` here.
 
+[Spec] Table 3.1 (p.41), column RCDT[i], rows i = 0..17.  The table's row 18
+       (`RCDT[18] = 0`) is not stored: algorithm 12's loop runs i = 0..17, so
+       an entry that can never exceed a 72-bit `u` would be dead weight.
 [Py-ref] scripts/pyref/samplerz.py:24-43
 
 The values are transcribed, not derived -- but `test_samplerz.jl` checks them
-against the half-Gaussian they are supposed to represent, which is what would
-catch a transposed digit.
+against the half-Gaussian they are supposed to represent, and
+`test_spec.jl` rebuilds them from Table 3.1's *pdt* column via
+`RCDT[i] = 2^72 - sum_{j<=i} pdt[j]`, which is what would catch a transposed
+digit.  The pdt column is a useful second transcription precisely because its
+entries sum to exactly 2^72: nineteen 22-digit numbers with a checksum.
 """
 const RCDT = UInt128[
     3024686241123004913666,
@@ -368,6 +377,63 @@ end
 
 samplerz(mu::Real, sigma::Real, sigmin::Real, randombytes) =
     samplerz(Float64(mu), Float64(sigma), Float64(sigmin), randombytes)
+
+"""
+    samplerz_isigma(mu, isigma, sigmin, randombytes) -> Int
+
+[`samplerz`](@ref) over `isigma = 1/sigma` instead of `sigma`, spelled the way
+the C reference spells it.
+
+[C-ref] scripts/cref/sign.c, `Zf(sampler)`:
+
+    dss = fpr_half(fpr_sqr(isigma));        /* 0.5 * isigma^2   */
+    ccs = fpr_mul(isigma, spc->sigma_min);  /* sigma_min * isigma */
+
+where the specification's `SamplerZ` (algorithm 15, line 2) writes
+`ccs <- sigma_min/sigma`, and the width enters as `1/(2*sigma^2)`.
+
+## This is not a micro-optimisation, and it is not free either
+
+The C reference stores `1/sigma` in the tree leaves precisely so that these two
+constants are a multiplication rather than a division ("this saves a division
+both here and in the sampler" -- sign.c).  The arithmetic is different, and
+measured over 200000 admissible widths the two spellings give a different
+`dss` **54.8%** of the time and a different `ccs` **31.9%** of the time, always
+in the last bit.
+
+Whether that changes the sampled integer is a separate question, and the answer
+appears to be almost never: over 20000 draws on identical byte streams, the two
+routines never disagreed (docs/debug_log.md #048).  `berexp`'s decision has far
+more margin than an ulp.  "Never observed" is not "never": the flip probability
+per draw is on the order of 2^-52, so about 2^-42 per FALCON-512 signature.
+
+THIS BRANCH uses this entry point, because reproducing the C reference's bytes
+means reproducing its arithmetic and not merely its distribution.  `samplerz`
+above remains the specification's, and is what the official 3072-vector KAT is
+replayed through.
+
+CONSTANT TIME: identical to `samplerz` -- see there.
+"""
+function samplerz_isigma(mu::Float64, isigma::Float64, sigmin::Float64, randombytes)
+    s = Int(floor(mu))
+    r = mu - s
+    dss = 0.5 * (isigma * isigma)
+    ccs = isigma * sigmin
+
+    while true
+        z0 = basesampler(randombytes)
+        b = Int(randombytes(1)[1]) & 1
+        z = b + (2b - 1) * z0
+        x = ((z - r)^2) * dss
+        x -= (z0^2) * INV_2SIGMA2
+        if berexp(x, ccs, randombytes)
+            return z + s
+        end
+    end
+end
+
+samplerz_isigma(mu::Real, isigma::Real, sigmin::Real, randombytes) =
+    samplerz_isigma(Float64(mu), Float64(isigma), Float64(sigmin), randombytes)
 
 # ---------------------------------------------------------------------------
 # Byte sources

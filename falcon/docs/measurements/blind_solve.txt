@@ -1,0 +1,9 @@
+# blind_solve.jl -- recover f without which-call labels, via a rank-2 lift
+n    D      M        result (8 trials)
+8    36     43       recovered f blindly 7/8  (M = 1.4*n(n+1)/2 events)
+16   136    163      recovered f blindly 8/8  (M = 1.4*n(n+1)/2 events)
+32   528    634      recovered f blindly 8/8  (M = 1.4*n(n+1)/2 events)
+
+# labelled channel needs O(n) events (section 6.5); blind needs O(n^2).
+# at n=512 that is ~1.3e7 vs ~3.3e9 first-two events -- an n-fold overhead,
+# not an impossibility.  The which-call disjunction is solved, not assumed away.

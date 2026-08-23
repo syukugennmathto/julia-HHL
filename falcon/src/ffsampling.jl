@@ -115,9 +115,11 @@ entry `D`; after [`normalize_tree!`](@ref), `sigma` holds
 mutable struct FFLDLLeaf <: FalconTree
     value::Vector{ComplexF64}
     sigma::Float64
+    "`sqrt(D) * (1/sigma)`, the reciprocal of `sigma`, stored as the C reference stores it"
+    isigma::Float64
 end
 
-FFLDLLeaf(value::Vector{ComplexF64}) = FFLDLLeaf(value, NaN)
+FFLDLLeaf(value::Vector{ComplexF64}) = FFLDLLeaf(value, NaN, NaN)
 
 "Number of leaves, i.e. the degree the tree was built for."
 nleaves(t::FFLDLLeaf) = 1
@@ -202,10 +204,55 @@ are scalars (`normalize_tree!`).
 function ldl_fft(G::Matrix{Vector{ComplexF64}})
     size(G) == (2, 2) || throw(ArgumentError("ldl_fft expects a 2x2 matrix"))
     D00 = copy(G[1, 1])
-    L10 = div_fft(G[2, 1], G[1, 1])
-    D11 = sub_fft(G[2, 2], mul_fft(mul_fft(L10, adj_fft(L10)), G[1, 1]))
+
+    # THIS BRANCH computes D11 the way the C reference does, which is not the
+    # way the specification writes it.  Algorithm 8 (and the Python reference,
+    # ffsampling.py:80-82) says
+    #
+    #     L10 = G10 / G00
+    #     D11 = G11 - L10 * adj(L10) * G00           -- three multiplications
+    #
+    # while C keeps the quotient the other way round and folds:
+    #
+    #     mu  = G01 / G00
+    #     D11 = G11 - mu * adj(G01)                  -- one multiplication
+    #     L10 = adj(mu)
+    #
+    # [C-ref] scripts/cref/fft.c, `Zf(poly_LDL_fft)`
+    #
+    # They are equal in exact arithmetic -- `mu*adj(G01) = |G01|^2/G00` and
+    # `L10*adj(L10)*G00 = |G01|^2/|G00|^2 * G00`, and G00 is real because it is
+    # Hermitian -- and they differ in the last bit in floating point.  Since the
+    # sampler *rounds* what comes out of here, a last-bit difference becomes a
+    # different signature (docs/debug_log.md #048).
+    #
+    # `G01` is recovered as `adj(G[2,1])` rather than read from `G[1,2]`: the
+    # conjugate is a sign flip and therefore exact, and this way the routine
+    # does not depend on the caller having filled the redundant upper corner.
+    if !LDL_CREF[]
+        # The specification's own spelling, for the ablation.  Algorithm 8 and
+        # ffsampling.py:80-82.  Three multiplications where C does one.
+        L10 = div_fft(G[2, 1], G[1, 1])
+        D11 = sub_fft(G[2, 2], mul_fft(mul_fft(L10, adj_fft(L10)), G[1, 1]))
+        return (L10, D00, D11)
+    end
+    G01 = adj_fft(G[2, 1])
+    mu = div_fft(G01, G[1, 1])
+    L10 = adj_fft(mu)
+    D11 = sub_fft(G[2, 2], mul_fft(mu, G[2, 1]))
     return (L10, D00, D11)
 end
+
+"""
+    LDL_CREF
+
+Whether [`ldl_fft`](@ref) computes `D11` the way the C reference does (`true`,
+the default) or the way Algorithm 8 of the specification writes it (`false`).
+
+As with [`CDIV_CREF`](@ref), this exists for the ablation in
+scripts/divergence_rate.jl, not for production use.
+"""
+const LDL_CREF = Ref(true)
 
 """
     ffldl_fft(G) -> FalconTree
@@ -265,14 +312,44 @@ elements.  The value stored is what `ffSampling` passes to `samplerz` as its
 `sigma`; the constraint `sigma_min < that < sigma_max` from params.jl is what
 the key-generation Gram-Schmidt bound `1.17^2 q` was chosen to guarantee.
 """
-function normalize_tree!(tree::FFLDLNode, sigma::Real)
-    normalize_tree!(tree.left, sigma)
-    normalize_tree!(tree.right, sigma)
+function normalize_tree!(tree::FalconTree, sigma::Real)
+    # `logn` here is the degree of the *whole* tree, not of the current node --
+    # the C reference calls it `orig_logn` and threads it down for exactly the
+    # same reason: `fpr_inv_sigma` is indexed by it.
+    logn = round(Int, log2(nleaves(tree)))
+    return _normalize_tree!(tree, sigma, logn)
+end
+
+function _normalize_tree!(tree::FFLDLNode, sigma::Real, logn::Int)
+    _normalize_tree!(tree.left, sigma, logn)
+    _normalize_tree!(tree.right, sigma, logn)
     return tree
 end
 
-function normalize_tree!(leaf::FFLDLLeaf, sigma::Real)
-    leaf.sigma = sigma / sqrt(real(leaf.value[1]))
+function _normalize_tree!(leaf::FFLDLLeaf, sigma::Real, logn::Int)
+    x = real(leaf.value[1])
+    # The specification's value: the width handed to `SamplerZ`.
+    leaf.sigma = sigma / sqrt(x)
+    # THIS BRANCH also stores the C reference's value, which is its reciprocal
+    # and is *not* computed as one:
+    #
+    #     [C-ref] scripts/cref/sign.c, `ffLDL_binary_normalize`:
+    #         tree[0] = fpr_mul(fpr_sqrt(tree[0]), fpr_inv_sigma[orig_logn]);
+    #
+    # "We actually store in the tree leaf the inverse of the value mandated by
+    # the specification: this saves a division both here and in the sampler."
+    # `fpr_inv_sigma[logn]` is a *table constant*, and -- this is the part that
+    # is easy to get wrong -- it is **not** the correctly rounded reciprocal of
+    # the sigma in Table 3.3.  At logn = 9 the table entry and `1/sigma`
+    # differ by one ulp; at logn = 10, by two.  Presumably the table was
+    # computed from a sigma with more digits than Table 3.3 prints.  Whatever
+    # the reason, a reciprocal computed here does not reproduce it, so the
+    # literals are transcribed (`INV_SIGMA_CREF`).
+    #
+    # And C multiplies by it where the specification divides, so
+    # `sqrt(x) * inv_sigma` is not bit-equal to `1 / (sigma / sqrt(x))`
+    # either (docs/debug_log.md #050).
+    leaf.isigma = sqrt(x) * _inv_sigma_cref(sigma, logn)
     leaf.value[2] = 0
     return leaf
 end
@@ -320,6 +397,283 @@ function ffnp_fft(t::NTuple{2,Vector{ComplexF64}}, T::FalconTree)
     end
 end
 
+
+# ---------------------------------------------------------------------------
+# The bottom of the recursion, as the C reference writes it
+# ---------------------------------------------------------------------------
+
+"""
+    FFSAMPLING_CREF
+
+Whether `ffsampling_fft` uses the C reference's spelling of the bottom two
+levels (`_ffsampling_c4`, with the leaves' reciprocal widths) or the
+specification's generic recursion.
+
+**Defaults to `true` on this branch**, which is what makes signing reproduce
+the C reference's bytes.  Set it to `false` -- see [`with_spec_ffsampling`](@ref)
+-- to get the specification's route back; the recorded Python-reference vectors
+are replayed that way, since they were produced by it.
+"""
+const FFSAMPLING_CREF = Ref(true)
+
+"""
+    with_spec_ffsampling(f)
+
+Run `f()` with `ffsampling_fft` on the specification's generic recursion rather
+than the C reference's spelling, restoring the previous setting afterwards.
+"""
+function with_spec_ffsampling(f)
+    old = FFSAMPLING_CREF[]
+    FFSAMPLING_CREF[] = false
+    try
+        return f()
+    finally
+        FFSAMPLING_CREF[] = old
+    end
+end
+
+"""
+    with_spec_spelling(f; cdiv = false, ldl = false, ffsampling = false)
+
+Run `f()` with any subset of the three algebraically-equal-but-differently-
+rounded formulations switched from the C reference's spelling to the
+specification's, restoring all three afterwards.
+
+The three are independent, and the point of separating them is that they are
+not equally novel:
+
+  * `ffsampling` -- the hand-unrolled bottom levels.  This is the SAME
+    difference ePrint 2024/1709 §6.1 identifies between the reference's
+    `sign_dyn` and `sign_tree` modes, down to the folded `1/(2*sqrt(2))`
+    constant, and §7.2 of that paper gives a countermeasure for it.  Measuring
+    it reproduces a published result; it does not establish a new one.
+  * `cdiv`, `ldl` -- complex division and the `D11` entry of LDL*.  These are
+    differences between the specification (with the Python reference) and the C
+    reference, present in BOTH of C's signing modes, and they do not appear in
+    2024/1709.  They perturb the tree's `l10` and its leaf widths, so they
+    reach the sampler's centres by a different route than `ffsampling` does.
+
+So `with_spec_spelling(f; cdiv = true, ldl = true)` -- holding `ffsampling` at
+the C spelling -- is the ablation that decides whether anything here is not
+already 2024/1709 §6.1.  See scripts/divergence_rate.jl.
+"""
+function with_spec_spelling(f; cdiv::Bool = false, ldl::Bool = false,
+                            ffsampling::Bool = false)
+    old = (CDIV_CREF[], LDL_CREF[], FFSAMPLING_CREF[])
+    cdiv && (CDIV_CREF[] = false)
+    ldl && (LDL_CREF[] = false)
+    ffsampling && (FFSAMPLING_CREF[] = false)
+    try
+        return f()
+    finally
+        CDIV_CREF[], LDL_CREF[], FFSAMPLING_CREF[] = old
+    end
+end
+
+"""
+    INV_SIGMA_CREF
+
+`1/sigma` per degree, indexed by `logn + 1`, transcribed from the C reference's
+`fpr_inv_sigma[]` table.
+
+[C-ref] scripts/cref/fpr.h, `fpr_inv_sigma[]` (the FALCON_FPNATIVE branch)
+
+**These are not the reciprocals of Table 3.3's sigmas.**  Computing
+`1/165.7366171829776` gives a Float64 one ulp below the entry below, and at
+`logn = 10` two ulp below.  Table 3.3 prints sigma to twelve significant
+figures; the table here was evidently derived from something more precise.
+Since the reference multiplies the tree leaves by *this* number, reproducing
+its signatures means carrying *this* number (docs/debug_log.md #050).
+
+Index 1 (`logn = 0`) is the reference's unused zero slot, kept so the indexing
+matches the C source line for line.
+"""
+const INV_SIGMA_CREF = (
+    0.0,                                     # logn = 0, unused in the reference
+    0.0069054793295940891952143765991630516, # logn = 1
+    0.0068102267767177975961393730687908629,
+    0.0067188101910722710707826117910434131,
+    0.0065883354370073665545865037227681924,
+    0.0064651781207602900738053897763485516,
+    0.0063486788828078995327741182928037856,
+    0.0062382586529084374473367528433697537,
+    0.0061334065020930261548984001431770281,
+    0.0060336696681577241031668062510953022, # logn = 9  (FALCON-512)
+    0.0059386453095331159950250124336477482, # logn = 10 (FALCON-1024)
+)
+
+"""
+The `fpr_inv_sigma` entry the C reference would use for this width.
+
+Indexing by the *tree's* degree is not enough: the toy trees the recorded
+Python vectors use are built at degree 8 with FALCON-512's `sigma`, and the C
+table is indexed by the degree whose `sigma` it is.  So the lookup is by the
+value of `sigma`, and anything that is not a standardised width falls back to
+the reciprocal -- which is what the specification's route would do anyway.
+"""
+function _inv_sigma_cref(sigma::Real, logn::Int)
+    sig = Float64(sigma)
+    sig == FALCON_512.sigma  && return INV_SIGMA_CREF[10]   # logn = 9
+    sig == FALCON_1024.sigma && return INV_SIGMA_CREF[11]   # logn = 10
+    1 <= logn <= 10 && return INV_SIGMA_CREF[logn + 1]
+    return 1 / sig
+end
+
+"1/sqrt(2), as the C reference spells it.  [C-ref] scripts/cref/fpr.h, `fpr_invsqrt2`"
+const INVSQRT2 = 0.707106781186547524400844362105
+
+"1/sqrt(8).  [C-ref] scripts/cref/fpr.h, `fpr_invsqrt8`"
+const INVSQRT8 = 0.353553390593273762200422181052
+
+"""
+    _ffsampling_c4(t0, t1, node, sigmin, randombytes) -> (z0, z1)
+
+The last two levels of `ffsampling_fft`, at degree 4, transcribed operation by
+operation from the C reference's hand-unrolled block.
+
+[C-ref] scripts/cref/sign.c, `ffSampling_fft`, the `logn == 2` case.
+
+## WIRED IN, AND VERIFIED WITH THE REAL SAMPLER.
+
+`ffsampling_fft` calls this at `n == 4` whenever `FFSAMPLING_CREF[]` is true,
+which is the default on this branch (see the dispatch below).  It is what
+makes signing reproduce the C reference's bytes.
+
+An earlier revision of this comment said the block was left disconnected
+because only its *arithmetic* had been checked (against a deterministic
+`floor` stand-in for the sampler) and not the *order and count of its
+`samplerz` calls*.  That gap has since been closed.  `scripts/cref_shim.c`
+drives the C reference's real sampler off a directly seeded 56-byte ChaCha20
+state, `scripts/gen_cref_sign_kat.jl` records its output, and
+`test/test_falcon.jl` ("signing reproduces the C reference byte for byte")
+replays those vectors: with this block wired in, our `sample_preimage` returns
+C's `s2` exactly, and `compress_sig` returns C's bytes exactly, on all eight
+vectors.  Reproducing the bytes is only possible if the four `samplerz` calls
+below consume randomness in C's order, so that order is now measured, not just
+transcribed.
+
+The one caveat that remains is the one every spelling on this branch shares:
+these algebraically-equal rewrites move the sampler's centre, so on rare
+inputs (~1e-5 per signature) reverting them changes the signature -- see
+`with_spec_ffsampling`, `scripts/divergence_rate.jl` and docs/debug_log.md
+#056.  That is a statement about the specification, not a defect in this
+block.
+
+The `FFSAMPLING_KAT` vectors recorded from the *Python* reference are replayed
+through the generic recursion (`with_spec_ffsampling`), not through this block,
+because the Python reference does not hand-unroll `logn == 2`.
+
+## Why it exists at all
+
+THIS BRANCH is trying to reproduce the C reference's signature *bytes*.  Every
+floating-point primitive underneath was checked against C and found bit-exact
+-- `fft`, `ifft`, `split_fft`, `merge_fft`, `add_fft`, `sub_fft`, `mul_fft`,
+`adj_fft`, `div_fft` (once spelled C's way, see fft.jl) and `ldl_fft` (ditto).
+The recursion built from them still disagreed, and bisecting by degree put the
+first disagreement at degree 4 -- exactly where C stops calling its own
+`poly_split_fft` / `poly_merge_fft` and runs a flat block of scalar
+operations instead (docs/debug_log.md #048).
+
+The block is not doing different mathematics.  It is doing the same split and
+merge with the constants pre-folded:
+
+  * `split`: the generic routine computes `0.5*(a - b)` and then multiplies by
+    `conj(w)` where `w = exp(i*pi/4)`.  C folds the halving and the twiddle
+    into one constant, `1/sqrt(8)`, and does one multiplication where the
+    generic path does two.
+  * `merge`: the generic routine multiplies by `w`; C computes
+    `(b_re - b_im)/sqrt(2)` and `(b_re + b_im)/sqrt(2)`, two real
+    multiplications instead of a complex one.
+
+Fewer roundings, different roundings.  Substituting this block made the whole
+recursion agree with C at every degree from 4 to 512.
+
+CONSTANT TIME: unchanged from the generic path -- the data-dependent work is
+all inside `samplerz`.
+
+NOTE ON THE ORDER OF SAMPLER CALLS: the four `samplerz` calls below are in C's
+order, and that order matters because each call consumes bytes from
+`randombytes`.  That the order is C's is confirmed, not merely transcribed: the
+byte-exact KAT above drives the real sampler off a controlled PRNG, and it
+would fail on the first call taken out of order.
+"""
+function _ffsampling_c4(t0::Vector{ComplexF64}, t1::Vector{ComplexF64},
+                        node::FFLDLNode, sigmin::Real, randombytes)
+    L = node.l10
+    tree0 = node.left::FFLDLNode
+    tree1 = node.right::FFLDLNode
+    l0 = tree0.l10[1]
+    l1 = tree1.l10[1]
+    # the C reference's leaves: 1/sigma, not sigma
+    s0a = (tree0.left::FFLDLLeaf).isigma;  s0b = (tree0.right::FFLDLLeaf).isigma
+    s1a = (tree1.left::FFLDLLeaf).isigma;  s1b = (tree1.right::FFLDLLeaf).isigma
+    for s in (s0a, s0b, s1a, s1b)
+        isnan(s) && throw(ArgumentError(
+            "ffsampling_fft on an un-normalised tree: call normalize_tree! first"))
+    end
+
+    # --- split t1, sample, merge into z1
+    a_re = real(t1[1]); a_im = imag(t1[1]); b_re = real(t1[2]); b_im = imag(t1[2])
+    c_re = a_re + b_re; c_im = a_im + b_im
+    w0 = 0.5 * c_re;    w1 = 0.5 * c_im
+    c_re = a_re - b_re; c_im = a_im - b_im
+    w2 = (c_re + c_im) * INVSQRT8
+    w3 = (c_im - c_re) * INVSQRT8
+    x0 = w2; x1 = w3
+    w2 = Float64(samplerz_isigma(x0, s1b, sigmin, randombytes))
+    w3 = Float64(samplerz_isigma(x1, s1b, sigmin, randombytes))
+    a_re = x0 - w2; a_im = x1 - w3
+    b_re = real(l1); b_im = imag(l1)
+    c_re = a_re * b_re - a_im * b_im
+    c_im = a_re * b_im + a_im * b_re
+    x0 = c_re + w0; x1 = c_im + w1
+    w0 = Float64(samplerz_isigma(x0, s1a, sigmin, randombytes))
+    w1 = Float64(samplerz_isigma(x1, s1a, sigmin, randombytes))
+    a_re = w0; a_im = w1; b_re = w2; b_im = w3
+    c_re = (b_re - b_im) * INVSQRT2
+    c_im = (b_re + b_im) * INVSQRT2
+    z1u = complex(a_re + c_re, a_im + c_im)
+    z1v = complex(a_re - c_re, a_im - c_im)
+    z1 = ComplexF64[z1u, z1v, conj(z1u), conj(z1v)]
+
+    # --- tb0 = t0 + (t1 - z1) * L
+    w0 = real(t1[1]) - real(z1[1]); w1 = real(t1[2]) - real(z1[2])
+    w2 = imag(t1[1]) - imag(z1[1]); w3 = imag(t1[2]) - imag(z1[2])
+    a_re = w0; a_im = w2; b_re = real(L[1]); b_im = imag(L[1])
+    w0 = a_re * b_re - a_im * b_im
+    w2 = a_re * b_im + a_im * b_re
+    a_re = w1; a_im = w3; b_re = real(L[2]); b_im = imag(L[2])
+    w1 = a_re * b_re - a_im * b_im
+    w3 = a_re * b_im + a_im * b_re
+    w0 += real(t0[1]); w1 += real(t0[2]); w2 += imag(t0[1]); w3 += imag(t0[2])
+
+    # --- split tb0, sample, merge into z0
+    a_re = w0; a_im = w2; b_re = w1; b_im = w3
+    c_re = a_re + b_re; c_im = a_im + b_im
+    w0 = 0.5 * c_re;    w1 = 0.5 * c_im
+    c_re = a_re - b_re; c_im = a_im - b_im
+    w2 = (c_re + c_im) * INVSQRT8
+    w3 = (c_im - c_re) * INVSQRT8
+    x0 = w2; x1 = w3
+    w2 = Float64(samplerz_isigma(x0, s0b, sigmin, randombytes))
+    w3 = Float64(samplerz_isigma(x1, s0b, sigmin, randombytes))
+    a_re = x0 - w2; a_im = x1 - w3
+    b_re = real(l0); b_im = imag(l0)
+    c_re = a_re * b_re - a_im * b_im
+    c_im = a_re * b_im + a_im * b_re
+    x0 = c_re + w0; x1 = c_im + w1
+    w0 = Float64(samplerz_isigma(x0, s0a, sigmin, randombytes))
+    w1 = Float64(samplerz_isigma(x1, s0a, sigmin, randombytes))
+    a_re = w0; a_im = w1; b_re = w2; b_im = w3
+    c_re = (b_re - b_im) * INVSQRT2
+    c_im = (b_re + b_im) * INVSQRT2
+    z0u = complex(a_re + c_re, a_im + c_im)
+    z0v = complex(a_re - c_re, a_im - c_im)
+    z0 = ComplexF64[z0u, z0v, conj(z0u), conj(z0v)]
+
+    return (z0, z1)
+end
+
 """
     ffsampling_fft(t, T, sigmin, randombytes) -> (z0, z1)
 
@@ -349,7 +703,9 @@ Float64.
 function ffsampling_fft(t::NTuple{2,Vector{ComplexF64}}, T::FalconTree,
                         sigmin::Real, randombytes)
     n = length(t[1])
-    if n > 1
+    if n == 4 && FFSAMPLING_CREF[]
+        return _ffsampling_c4(t[1], t[2], T::FFLDLNode, sigmin, randombytes)
+    elseif n > 1
         node = T::FFLDLNode
         t1a, t1b = split_fft(t[2])
         z1 = merge_fft(ffsampling_fft((t1a, t1b), node.right, sigmin, randombytes)...)

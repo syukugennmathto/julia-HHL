@@ -217,6 +217,14 @@ function merge_fft(f0_fft::AbstractVector{ComplexF64}, f1_fft::AbstractVector{Co
     n = 2m
     w = fft_roots(n)
     out = Vector{ComplexF64}(undef, n)
+    if FMA_FFT[]
+        @inbounds for i in 1:m
+            t = _cmul_fma(w[2i - 1], f1_fft[i])
+            out[2i - 1] = f0_fft[i] + t
+            out[2i]     = f0_fft[i] - t
+        end
+        return out
+    end
     @inbounds for i in 1:m
         t = w[2i - 1] * f1_fft[i]
         out[2i - 1] = f0_fft[i] + t
@@ -250,6 +258,15 @@ function split_fft(f_fft::AbstractVector{ComplexF64})
     w = fft_roots(n)
     f0 = Vector{ComplexF64}(undef, m)
     f1 = Vector{ComplexF64}(undef, m)
+    if FMA_FFT[]
+        @inbounds for i in 1:m
+            a = f_fft[2i - 1]
+            b = f_fft[2i]
+            f0[i] = 0.5 * (a + b)
+            f1[i] = _cmul_fma(0.5 * (a - b), conj(w[2i - 1]))
+        end
+        return (f0, f1)
+    end
     @inbounds for i in 1:m
         a = f_fft[2i - 1]
         b = f_fft[2i]
@@ -336,7 +353,9 @@ neg_fft(f::AbstractVector{ComplexF64}) = ComplexF64[-c for c in f]
 
 "Coordinatewise product.  [Py-ref] fft.py:130-133"
 mul_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64}) =
-    (_checklen(f, g); ComplexF64[f[i] * g[i] for i in eachindex(f)])
+    (_checklen(f, g); FMA_FFT[] ?
+        ComplexF64[_cmul_fma(f[i], g[i]) for i in eachindex(f)] :
+        ComplexF64[f[i] * g[i] for i in eachindex(f)])
 
 """
     div_fft(f_fft, g_fft)
@@ -351,8 +370,130 @@ raising anything.  In FALCON this matters in exactly one place, the
 is safe precisely because that quantity is bounded away from zero by the
 rejection test.
 """
-div_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64}) =
-    (_checklen(f, g); ComplexF64[f[i] / g[i] for i in eachindex(f)])
+function div_fft(f::AbstractVector{ComplexF64}, g::AbstractVector{ComplexF64})
+    _checklen(f, g)
+    CDIV_CREF[] || return ComplexF64[f[i] / g[i] for i in eachindex(f)]
+    return ComplexF64[_cdiv_cref(f[i], g[i]) for i in eachindex(f)]
+end
+
+"""
+    CDIV_CREF
+
+Whether `div_fft` spells complex division the way the C reference does
+(`true`, the default) or the way the specification's readers do, which is
+their language's own complex division (`false` -- Julia's and Python's are
+both Smith's algorithm).
+
+This exists to be turned off in an experiment, not in production.  See
+[`with_spec_spelling`](@ref) and scripts/divergence_rate.jl.
+
+CONSTANT TIME: out of scope, but note that this is a global `Ref` read on
+every division, which a real implementation would resolve at compile time.
+"""
+const CDIV_CREF = Ref(true)
+
+"""
+Complex division **spelled the way the C reference spells it**, so that the
+result agrees with it bit for bit.
+
+    m  = 1 / (b_re^2 + b_im^2)
+    b' = (b_re*m, -b_im*m)              # the reciprocal, formed explicitly
+    d  = (a_re*b'_re - a_im*b'_im,  a_re*b'_im + a_im*b'_re)
+
+[C-ref] scripts/cref/fft.c:122-146 (`FPC_DIV`), used by `Zf(poly_div_fft)` and
+`Zf(poly_LDL_fft)`.
+
+## Why this is not `a / b`
+
+THIS BRANCH diverges from the specification here, and it is worth being exact
+about where.  Julia's `Complex{Float64}` division uses Smith's algorithm: it
+scales by whichever of `|b_re|`, `|b_im|` is larger, so that `b_re^2 + b_im^2`
+cannot overflow or underflow when the true quotient is representable.  Python
+does the same, so `main` -- which follows the Python reference -- gets Smith's
+answer.  The C reference does not: it forms `1/|b|^2` directly and multiplies.
+
+The two agree to about an ulp and disagree in the last bit constantly.  Since
+FALCON's signature is a *rounded* function of these values, "about an ulp"
+propagates into different sampler decisions and hence different signature
+bytes, which is why this one line is the difference between reproducing the C
+reference's signatures and not (docs/debug_log.md #048).
+
+Measured on this branch, this is the **only** FFT-domain primitive that
+differed: `fft`, `ifft`, `split_fft`, `merge_fft`, `add_fft`, `sub_fft`,
+`mul_fft`, `adj_fft` and the fused adjoint products were already bit-exact
+against C at every degree from 8 to 1024.
+
+NUMERICS: Smith's algorithm is the better one, and this is a deliberate step
+down.  C gets away with it because Falcon's dynamic range is small -- the
+specification says so in section 4.1: "exponents remain relatively close to
+zero; no infinite or NaN is obtained".  Outside FALCON's inputs this routine
+will overflow where `a / b` would not.
+"""
+@inline function _cdiv_cref(a::ComplexF64, b::ComplexF64)
+    br = real(b); bi = imag(b)
+    m = 1.0 / (br * br + bi * bi)
+    br *= m
+    bi *= -m
+    ar = real(a); ai = imag(a)
+    FMA_FFT[] && return ComplexF64(fma(ar, br, -(ai * bi)),
+                                   fma(ar, bi, ai * br))
+    return ComplexF64(ar * br - ai * bi, ar * bi + ai * br)
+end
+
+"""
+    FMA_FFT
+
+Whether the FFT contracts `a*b + c` into a single fused multiply-add.
+
+This is **not** one of the three spelling classes of section 5: nobody writes
+`fma` in the source. C99 6.5p8 permits the *compiler* to contract an expression
+"as if" the intermediate had infinite range and precision, and `FP_CONTRACT`
+governs it. GCC defaults to `-ffp-contract=fast` and contracts across
+statements; clang and MSVC default to off for standard C. Both are conforming,
+and the FALCON reference sets neither. So the same source, on the same machine,
+built by two mainstream compilers at their defaults, computes different sampler
+centres — one rounding per complex product instead of two.
+
+ePrint 2024/1709 section 6.2 raises FMA as a plausible source of divergence
+between two implementations. We turn it into an *arm*, because section 6.6 needs
+a perturbation whose size can be compared against a window, not a hypothetical.
+
+CONSTANT TIME: irrelevant here (no secret-dependent branch); the toggle is
+hoisted out of every loop so the default path is untouched.
+"""
+const FMA_FFT = Ref(false)
+
+"""
+Complex product with the two dot products contracted, as `-ffp-contract=fast`
+does: one rounding per `a*b + c` instead of two.
+
+`fma`, not `muladd`. `muladd` in Julia — like `a*b + c` in C — is only
+*permitted* to fuse, and on this machine it does so in `merge_fft`'s loop and
+declines to in `mul_fft`'s comprehension, and declines again in both when the
+package is compiled with `--check-bounds=yes`. That is a faithful picture of the
+hazard and a useless experimental arm: the perturbation would depend on the
+build. `fma` is specified to round once, so the arm is reproducible, and it is
+the *upper* end of what a contracting compiler does rather than a sample of it.
+"""
+@inline function _cmul_fma(a::ComplexF64, b::ComplexF64)
+    ar, ai = reim(a); br, bi = reim(b)
+    return ComplexF64(fma(ar, br, -(ai * bi)), fma(ar, bi, ai * br))
+end
+
+"""
+    with_fma(f)
+
+Run `f()` with the FFT's complex products contracted (see [`FMA_FFT`](@ref)).
+"""
+function with_fma(f)
+    old = FMA_FFT[]
+    FMA_FFT[] = true
+    try
+        return f()
+    finally
+        FMA_FFT[] = old
+    end
+end
 
 """
     adj_fft(f_fft)

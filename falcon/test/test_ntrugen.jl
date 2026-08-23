@@ -89,6 +89,87 @@
         @test karamul(BigInt[], BigInt[]) == BigInt[]
     end
 
+    @testset "_negacyclic_schoolbook agrees with karatsuba" begin
+        # THIS BRANCH.  `karamul`'s multiprecision path is the allocation-free
+        # schoolbook, not `karatsuba` (docs/debug_log.md #047).  `karatsuba`
+        # stays as the transcription of the Python reference and, here, as an
+        # independent oracle: two different algorithms agreeing on random
+        # inputs says more than either agreeing with itself.
+        rng = MersenneTwister(20260821)
+        for n in (1, 2, 4, 8, 16, 32, 64), _ in 1:20
+            ba = rand(rng, (4, 56, 112, 208, 800))
+            bb = rand(rng, (4, 32, 56, 104, 416))
+            a = BigInt[rand(rng, big(-2)^ba:big(2)^ba) for _ in 1:n]
+            b = BigInt[rand(rng, big(-2)^bb:big(2)^bb) for _ in 1:n]
+            ab = Falcon.karatsuba(a, b, n)
+            want = BigInt[ab[i] - ab[i + n] for i in 1:n]   # x^n = -1
+            @test Falcon._negacyclic_schoolbook(a, b, n) == want
+        end
+
+        # Sparse inputs take the `iszero` skip, which is a separate path.
+        let n = 16
+            a = BigInt[iszero(i % 5) ? big(2)^300 + i : BigInt(0) for i in 1:n]
+            b = BigInt[BigInt(i) for i in 1:n]
+            ab = Falcon.karatsuba(a, b, n)
+            @test Falcon._negacyclic_schoolbook(a, b, n) ==
+                  BigInt[ab[i] - ab[i + n] for i in 1:n]
+        end
+
+        # ...and the wiring: karamul on wide coefficients must go through it.
+        let n = 8
+            a = BigInt[rand(rng, big(-2)^500:big(2)^500) for _ in 1:n]
+            b = BigInt[rand(rng, big(-2)^500:big(2)^500) for _ in 1:n]
+            ab = Falcon.karatsuba(a, b, n)
+            @test karamul(a, b) == BigInt[ab[i] - ab[i + n] for i in 1:n]
+            @test karamul(a, b) == polymul(a, b)
+        end
+    end
+
+    @testset "_negacyclic_addmul! agrees with karamul, in both tiers" begin
+        # THIS BRANCH.  `babai_reduce` no longer calls `karamul` for the
+        # correction: `ki` is a vector of machine integers, so the product is
+        # bignum-times-word and goes through `mpz_addmul_ui` with no
+        # temporaries -- or, when everything fits 62 bits, through a plain
+        # Int64 convolution with no GMP at all (docs/debug_log.md #044).
+        #
+        # Two tiers means two chances to be wrong, so the ranges below are
+        # chosen to cross the boundary in both directions: coefficient widths
+        # from 4 to 200 bits against corrections from 1 to 63 bits.  `karamul`
+        # is the oracle, which is fair -- it is separately checked against the
+        # schoolbook product above.
+        rng = MersenneTwister(20260821)
+        tiers = Set{Bool}()
+        for n in (1, 2, 4, 8, 16, 32), _ in 1:60
+            bits = rand(rng, (4, 20, 60, 200))
+            f = BigInt[rand(rng, big(-2)^bits:big(2)^bits) for _ in 1:n]
+            ki = Int64[rand(rng, 1:3) == 1 ? Int64(0) :
+                       (rand(rng, Int64) >> rand(rng, 1:63)) for _ in 1:n]
+
+            # which tier will this take?  (mirrors the test in the function)
+            kmax = maximum(abs, ki)
+            need = maximum(bitsize, f) + (64 - leading_zeros(kmax)) +
+                   (8 * sizeof(n) - leading_zeros(n))
+            push!(tiers, need <= 62)
+
+            acc = BigInt[BigInt() for _ in 1:n]
+            Falcon._negacyclic_addmul!(acc, f, ki)
+            @test acc == karamul(f, BigInt.(ki))
+        end
+        # The test is worthless if it only ever exercised one tier.
+        @test length(tiers) == 2
+
+        # `acc` is reused across calls, so it must be zeroed, not accumulated.
+        let n = 8
+            f = BigInt[BigInt(i) for i in 1:n]
+            ki = Int64[i == 1 ? Int64(3) : Int64(0) for i in 1:n]
+            acc = BigInt[BigInt(999) for _ in 1:n]
+            Falcon._negacyclic_addmul!(acc, f, ki)
+            @test acc == karamul(f, BigInt.(ki))
+            Falcon._negacyclic_addmul!(acc, f, ki)
+            @test acc == karamul(f, BigInt.(ki))
+        end
+    end
+
     @testset "tower operations against the reference" begin
         for (a, wconj, wnorm, wlift) in TOWER_OPS
             @test galois_conjugate(a) == wconj
@@ -290,5 +371,84 @@
             @test length(a) == len
         end
         @test length(a) == 1
+    end
+
+    @testset "this branch's reduction schedule -- what it keeps and what it drops" begin
+        # THIS BRANCH DIVERGES FROM THE SPECIFICATION.  See README.md and
+        # docs/debug_log.md #042.  `babai_reduce` here follows the C reference's
+        # explicit bit-budget schedule instead of the specification's Reduce,
+        # which the Python reference implements and which `main` follows.
+        #
+        # The testset above (`"ntru_solve reproduces the reference exactly"`)
+        # still passes, and that is *not* evidence the two agree in general:
+        # the recorded vectors have f and g of about 8 bits, so `size` is
+        # clamped to 53 in both schedules and they do the same thing.  The
+        # divergence only appears where f and g exceed 53 bits, which happens
+        # at the deep levels of a real n = 512 descent.  This testset pins down
+        # what survives the divergence and what does not.
+
+        rng = MersenneTwister(20260826)
+
+        # 1. The invariant that actually matters is preserved *exactly*.
+        #    Subtracting a multiple of (f, g) cannot change f*G - g*F, whatever
+        #    schedule chose the multiple.
+        for n in (2, 4, 8, 16, 32, 64)
+            for _ in 1:3
+                f = BigInt[rand(rng, -5:5) for _ in 1:n]
+                g = BigInt[rand(rng, -5:5) for _ in 1:n]
+                local F, G
+                try
+                    F, G = ntru_solve(f, g)
+                catch e
+                    e isa NTRUSolveFailure || rethrow()
+                    continue
+                end
+                @test ntru_equation_holds(f, g, F, G)
+                # and the solution is short: within a couple of bytes of (f, g)
+                fg = max(maximum(bitsize, f), maximum(bitsize, g))
+                @test maximum(bitsize, F) <= fg + 16
+                @test maximum(bitsize, G) <= fg + 16
+            end
+        end
+
+        # 2. An all-zero correction is NOT a stopping condition here.  On main
+        #    it is, and that is the whole difference: the loop must be able to
+        #    pass through a scale at which there is nothing to remove and keep
+        #    going at the next one.  Asserted by construction rather than by
+        #    timing: give babai_reduce an (F, G) that is already reduced, and
+        #    it must terminate and leave them alone rather than spin.
+        let n = 8
+            f = BigInt[rand(rng, -5:5) for _ in 1:n]
+            g = BigInt[rand(rng, -5:5) for _ in 1:n]
+            local F, G
+            try
+                F, G = ntru_solve(f, g)
+                Fr, Gr = Falcon.babai_reduce(f, g, F, G)
+                @test ntru_equation_holds(f, g, Fr, Gr)
+                @test maximum(bitsize, Fr) <= maximum(bitsize, F)
+                @test maximum(bitsize, Gr) <= maximum(bitsize, G)
+            catch e
+                e isa NTRUSolveFailure || rethrow()
+            end
+        end
+
+        # 3. Arguments are still not mutated -- the reduction works in place on
+        #    its own deep copies (docs/debug_log.md #040).
+        let n = 16
+            f = BigInt[rand(rng, -4:4) for _ in 1:n]
+            g = BigInt[rand(rng, -4:4) for _ in 1:n]
+            Fp, Gp = try
+                ntru_solve(Falcon.field_norm(f), Falcon.field_norm(g))
+            catch e
+                e isa NTRUSolveFailure ? (nothing, nothing) : rethrow()
+            end
+            if Fp !== nothing
+                Fraw = karamul(lift(Fp), galois_conjugate(g))
+                Graw = karamul(lift(Gp), galois_conjugate(f))
+                sF = copy(Fraw); sG = copy(Graw); sf = copy(f); sg = copy(g)
+                Falcon.babai_reduce(f, g, Fraw, Graw)
+                @test Fraw == sF && Graw == sG && f == sf && g == sg
+            end
+        end
     end
 end

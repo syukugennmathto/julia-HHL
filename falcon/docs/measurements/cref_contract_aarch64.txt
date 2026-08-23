@@ -1,0 +1,35 @@
+# aarch64 cross-architecture replication (static + dynamic under QEMU)
+# host: x86_64; cross gcc 13.2 (aarch64-linux-gnu-gcc), clang 18.1 (--target=aarch64),
+# qemu-aarch64-static for execution.  n=512, native double (FALCON_FPNATIVE=1).
+
+## STATIC: does the reference's fft.c contract on aarch64?  (real fft.c object, FMA count)
+  gcc   aarch64 -O2                    : 0 fma in fft.c
+  gcc   aarch64 -O2 -ffp-contract=fast : 0 fma in fft.c
+  gcc   aarch64 -Ofast                 : 0 fma in fft.c
+  clang aarch64 -O2                    : 0 fma in fft.c
+  clang aarch64 -O2 -ffp-contract=on   : 0 fma in fft.c
+  clang aarch64 -O2 -ffp-contract=fast : 34 fma in fft.c
+  clang aarch64 -O2 -ffp-contract=off  : 0 fma in fft.c
+  clang aarch64 -Ofast                 : 36 fma in fft.c
+  clang aarch64 -O2 -ffast-math        : 38 fma in fft.c
+# identical pattern to x86-64: the fpr struct wrapper blocks contraction for gcc
+# (every flag) and for clang except -ffp-contract=fast / -Ofast / -ffast-math.
+# (The isolated probe `a*b-c*d` through the wrapper DOES contract under aarch64
+#  gcc -O2 -- but the real macro's intermediate fpr variables block it, so the
+#  reference itself is protected.  Verify on the real code, not the probe.)
+
+## DYNAMIC (QEMU): clang aarch64 -ffp-contract=fast vs clang aarch64 default
+# both builds: privkey fnv 39afef910dae5682 (identical key from the seed, and
+# identical to the x86 build's key)
+  fma instructions: ca_fast 70, ca_def 0
+  150000 signatures each, one key, deterministic per-message tape:
+  19 of 150000 differ (rate 1.27e-4)   [x86 was 12/100000 = 1.2e-4]
+  first 12 divergent message indices identical to the x86 run.
+
+## key recovery on aarch64-produced signatures (5 low-index pairs)
+  message 7655  : 1023/1024 differ -> first-two divergence (section 6.5 channel)
+  message 8861  :  916/1024 differ -> KEY RECOVERED, forged, pubkey ACCEPTS
+  message 15028 : 1023/1024 differ -> first-two divergence
+  message 23215 :  966/1024 differ -> KEY RECOVERED (a,b)=(-2,1), forged, ACCEPTS
+  message 23823 :  916/1024 differ -> KEY RECOVERED (a,b)=(-1,0), forged, ACCEPTS
+  3 of 5 pairs yielded the key and a working forgery, on emulated aarch64.

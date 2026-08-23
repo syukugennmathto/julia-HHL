@@ -1,0 +1,19 @@
+# event_solve.jl  n=512  q=12289
+# target f: max |f_i| = 16
+
+collected 511 events from 5823368 syndromes (rate 8.77e-05, predicted 1/q = 8.14e-05)
+system rank 511 of 512 unknowns
+
+recovered vector: max |.| = 16   (true f has max |.| = 16)
+matches the secret f: true  (up to sign)
+
+*** KEY RECOVERED FROM EVENTS ALONE ***
+    No signature difference vectors were used.  No lattice reduction.
+    Only the boolean 'this message produced an integer centre at call 1',
+    plus the public syndrome, for 511 messages.
+    ePrint 2024/1709 section 5 assumed a first-two divergence could not
+    yield the key; over F_q it does, and in 512 x 512 Gaussian elimination.
+
+real	0m48.920s
+user	0m48.697s
+sys	0m0.316s

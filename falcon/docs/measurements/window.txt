@@ -1,0 +1,46 @@
+# window.jl  n=512  q=12289  mode=all  events=200  sigs=1200
+
+## eta -- the common rounding error at an exact-integer centre
+# 200 events from 2452134 uniform syndromes (rate 8.16e-05, 1/q = 8.14e-05)
+|eta| at call 1 over 200 events:  min 0  median 2.84e-14  max 1.14e-13
+sign(eta) > 0 in 153 of 200  (a straddle needs the two arms to differ in sign)
+
+## lower -- P(straddle at call 1 | exact integer centre) vs perturbation
+# 200 events; arm A unperturbed, arm B perturbed by delta*U[-1,1] at every call
+delta       straddle   sigdiff  P(straddle)  95% CI
+0                  0         0        0.000  0.000-0.000
+1e-16              0         0        0.000  0.000-0.000
+1e-15              0         0        0.000  0.000-0.000
+1e-14              6         6        0.030  0.006-0.054
+1e-13             58        58        0.290  0.227-0.353
+1e-12             85        85        0.425  0.356-0.494
+1e-11             87        87        0.435  0.366-0.504
+1e-10             88        88        0.440  0.371-0.509
+1e-08             88        88        0.440  0.371-0.509
+
+## upper -- the interior false-positive law, rate = kappa * delta
+# 1200 random syndromes per delta (events are ~1/q of them, negligible here)
+delta          diffs  rate         kappa=rate/delta
+0.0001           170  0.142        1.42e+03   
+3e-05             74  0.0617       2.06e+03   
+1e-05             22  0.0183       1.83e+03   
+3e-06              5  0.00417      1.39e+03   
+
+## fma -- GCC's -ffp-contract=fast against clang's default, as an arm
+# 1200 random syndromes, both arms on the same PRNG tape
+|dmu| first two : median 1.42e-14  max 1.07e-13  (exactly zero in 480 of 2400)
+|dmu| interior  : median 2.84e-14  max 1.48e-12
+|dmu| last two  : median 1.71e-13  max 1.25e-12
+signature divergence rate: 0/1200 = 0
+on 200 manufactured events: 33 straddled call 1, 33 signatures differed
+
+## the window
+lower edge  ~ |eta|                 = 2.84e-14
+upper edge  = (1/n)(1/q)(1/2)/kappa = 4.89e-11   (kappa = 1.62e+03)
+width                               = 3.24 decades
+respellings (sec 6.3): |dmu| = 2.7e-15 (A1), 0 (A2)  -> below the lower edge
+FMA contraction      : |dmu| = 1.42e-14, straddle rate 0.165  -> INSIDE the window
+
+real	1m4.574s
+user	1m4.310s
+sys	0m0.357s

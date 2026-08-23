@@ -1,0 +1,11 @@
+# window.jl  n=512  q=12289  mode=noise  events=10  sigs=150000
+
+## noise -- what fraction of FMA disagreements carries an equation
+# 150000 syndromes scanned with arm A; arm B run only on the hits
+first two : 26 integer centres (rate 0.000173, 2/q = 0.000163), 5 straddled -> informative rate 3.33e-05
+last two  : 20 integer centres (rate 0.000133), 1 straddled -> uninformative rate 6.67e-06
+of the disagreements the one-bit oracle reports, 5 of 6 = 83% carry an F_q equation
+
+real	4m3.139s
+user	4m2.562s
+sys	0m0.668s

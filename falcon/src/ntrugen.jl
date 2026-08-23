@@ -99,6 +99,19 @@ Karatsuba product of two length-`n` polynomials, returning the full `2n`
 coefficients *without* reduction modulo `x^n + 1`.
 
 [Py-ref] scripts/pyref/ntrugen.py:14-38
+
+**`karamul` no longer calls this.**  It is kept for two reasons that are not
+performance: it is the transcription of what the Python reference does, and it
+is an independent oracle for `_negacyclic_schoolbook` in the tests -- two
+different algorithms agreeing on random inputs is worth more than either one
+agreeing with itself.
+
+It lost the job by measurement, not by being wrong: at every size tried, from
+n = 2 to n = 2048, it is slower than the schoolbook that allocates nothing
+(docs/debug_log.md #047).  A non-allocating Karatsuba would be a different
+contest; this one is between "n^1.58 multiplications, each allocating" and
+"n^2 multiply-accumulates, allocating nothing", and at these sizes the malloc
+count decides it.
 """
 function karatsuba(a::AbstractVector{BigInt}, b::AbstractVector{BigInt}, n::Int)
     if n == 1
@@ -122,6 +135,66 @@ function karatsuba(a::AbstractVector{BigInt}, b::AbstractVector{BigInt}, n::Int)
         ab[i + m] += axbx[i]
     end
     return ab
+end
+
+# GMP's full-width fused multiply-accumulate, the bignum-by-bignum siblings of
+# the `_ui` pair used by `_negacyclic_addmul!`.  `r += a*b` and `r -= a*b` with
+# no temporary.  Base.GMP.MPZ wraps neither.
+@inline _addmul!(r::BigInt, a::BigInt, b::BigInt) =
+    ccall((:__gmpz_addmul, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Ref{BigInt}), r, a, b)
+
+@inline _submul!(r::BigInt, a::BigInt, b::BigInt) =
+    ccall((:__gmpz_submul, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Ref{BigInt}), r, a, b)
+
+"""
+    _negacyclic_schoolbook(a, b, n) -> Vector{BigInt}
+
+`a * b` in `Z[x]/(x^n + 1)` by schoolbook, accumulating in place with GMP's
+`mpz_addmul`.
+
+## Why this beats Karatsuba here, when asymptotically it should not
+
+Karatsuba does `n^1.58` coefficient multiplications where this does `n^2`, and
+at the sizes this file actually reaches -- `n <= 64` on the multiprecision
+path -- that is 811 against 4096.  Karatsuba nonetheless loses, because the
+`n^1.58` is paid in *full* `BigInt` products, each allocating a fresh GMP
+object, plus a recursion tree of temporary arrays and `SubArray`s.  This does
+`n^2` operations and allocates **nothing**: `mpz_addmul` reads two operands and
+adds the product into a third, in place.
+
+Allocation was 55% of the whole descent when it was measured (#044), so the
+count that matters is not multiplications but `malloc`s, and one of these is
+zero.
+
+The same reasoning already replaced `karamul` inside `babai_reduce`, where the
+second operand is a machine word (`_negacyclic_addmul!`).  This is the
+large-by-large case: the `lift(F') * conj(g)` products of the recursion.
+
+Pornin-Prest section 5.4 makes the same argument for the reduction, and adds
+that the crossover to an RNS/NTT method "heavily depends on implementation
+details and the involved hardware, and thus should be measured".  Measured
+here: docs/debug_log.md #047.
+
+`karatsuba` is kept, and is still what `karamul` uses above the crossover.
+"""
+function _negacyclic_schoolbook(a::AbstractVector{BigInt}, b::AbstractVector{BigInt},
+                                n::Int)
+    acc = BigInt[BigInt() for _ in 1:n]
+    @inbounds for i in 1:n
+        ai = a[i]
+        iszero(ai) && continue
+        for j in 1:n
+            k = i + j - 2               # degree of the term, zero-indexed
+            if k < n
+                _addmul!(acc[k + 1], ai, b[j])
+            else
+                _submul!(acc[k - n + 1], ai, b[j])   # x^n = -1
+            end
+        end
+    end
+    return acc
 end
 
 """
@@ -189,8 +262,13 @@ function karamul(a::AbstractVector{BigInt}, b::AbstractVector{BigInt})
         return BigInt.(_negacyclic_machine(Int128, a, b, n))
     end
 
-    ab = karatsuba(a, b, n)
-    return BigInt[ab[i] - ab[i + n] for i in 1:n]     # x^n = -1
+    # The multiprecision path is schoolbook, unconditionally.  There is no
+    # crossover to `karatsuba` because -- measured at every size from n = 2 to
+    # n = 2048 -- there isn't one: `karatsuba` is between 1.2x and 35x slower,
+    # and the gap *widens* with n (23x at n = 2048).  See docs/debug_log.md
+    # #047 for the table and for why the asymptotically better algorithm loses
+    # everywhere it was measured.
+    return _negacyclic_schoolbook(a, b, n)
 end
 
 """
@@ -434,75 +512,254 @@ time in the same way signing is, since it runs once and its timing does not
 correlate with a per-message secret.  The reference is nonetheless careful, and
 the loop trip count does depend on the key.
 """
+const BABAI_STEP = 25
+
+# GMP's fused multiply-accumulate.  `Base.GMP.MPZ` wraps a lot of libgmp but
+# not `addmul`/`submul`, and those two are exactly what this file wants: they
+# do `r += a*b` and `r -= a*b` *into* `r`, with no temporary, where the Julia
+# operators would allocate one GMP object for the product and another for the
+# sum.  Measured, allocation of `BigInt`s was 55% of the whole descent
+# (docs/debug_log.md #044), so removing the temporaries is the optimisation.
+#
+# `Ref{BigInt}` is the calling convention Base itself uses for `mpz_t`.
+@inline _addmul_ui!(r::BigInt, a::BigInt, b::Culong) =
+    ccall((:__gmpz_addmul_ui, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Culong), r, a, b)
+
+@inline _submul_ui!(r::BigInt, a::BigInt, b::Culong) =
+    ccall((:__gmpz_submul_ui, :libgmp), Cvoid,
+          (Ref{BigInt}, Ref{BigInt}, Culong), r, a, b)
+
+"""
+    _negacyclic_addmul!(acc, f, ki) -> acc
+
+`acc = f * ki` in `Z[x]/(x^n + 1)`, with `ki` a vector of machine integers,
+computed in place with no allocation at all.
+
+This is schoolbook, not Karatsuba, and that is deliberate.  `karamul` is
+asymptotically better and is the right choice for two vectors of comparable,
+large coefficients -- which is what the descent's `lift * conjugate` products
+are.  Here one side is a 64-bit correction, so every partial product is a
+`bignum * word`, which is exactly `mpz_addmul_ui`: one pass over the limbs,
+accumulating in place.  Karatsuba's recursion would buy `n^1.58` instead of
+`n^2` word-multiplications and pay for it with a tree of temporary `BigInt`s
+and `SubArray`s, and at these sizes the allocation is the whole cost.
+
+`ki` is usually sparse -- most corrections at a given scale are zero -- so the
+outer loop skips zeros and the true cost is `nnz(ki) * n`.
+
+## The machine-word tier is not optional
+
+The first version of this was the GMP path alone, and it made the *deep* levels
+(n <= 32, coefficients of hundreds of bits) ten times faster and the *top*
+level (n = 512, coefficients of 8 bits) seven times slower -- 1.16 ms to 7.79.
+The reason is that `karamul` has a machine-integer fast path, and at the top of
+the descent it applies: 8-bit `f` times a 25-bit correction over 512 terms is
+42 bits, so the whole convolution runs in `Int64` with no GMP at all.  Handing
+that case to `mpz_addmul_ui` replaces an add-and-multiply with a library call.
+So the same test `karamul` makes is made here, and the answer decides the tier.
+Measured both ways at every level: docs/debug_log.md #044.
+
+CONSTANT TIME: the zero skip is a data-dependent branch on a value derived from
+the secret basis, and the tier choice is a branch on its magnitude.  Key
+generation is not required to be constant time (see `babai_reduce`), and the
+reference takes the same liberty, but it is worth naming: this loop's trip
+count leaks the sparsity pattern of the corrections.
+"""
+function _negacyclic_addmul!(acc::Vector{BigInt}, f::Vector{BigInt}, ki::Vector{Int64},
+                             fbits::Int = maximum(bitsize, f))
+    n = length(f)
+    length(acc) == n || throw(DimensionMismatch("acc and f must agree"))
+    length(ki) == n || throw(DimensionMismatch("ki and f must agree"))
+
+    kmax = zero(Int64)
+    @inbounds for k in ki
+        a = abs(k)
+        kmax = ifelse(a > kmax, a, kmax)
+    end
+    # Same over-estimate as `karamul`: `bitsize` rounds up to a byte and the
+    # length term is rounded up, so passing this test is safe.
+    need = fbits + (64 - leading_zeros(kmax)) + (8 * sizeof(n) - leading_zeros(n))
+    if need <= 62
+        return _negacyclic_addmul_i64!(acc, f, ki, n)
+    end
+
+    @inbounds for i in 1:n
+        Base.GMP.MPZ.set_si!(acc[i], 0)
+    end
+    @inbounds for l in 1:n
+        k = ki[l]
+        k == 0 && continue
+        mag = Culong(abs(k))
+        neg = k < 0
+        # x^(l-1) * x^(j-1) = x^(l+j-2); the wrap at n costs a sign, since
+        # x^n = -1 in this ring.
+        base = l - 2
+        for j in 1:n
+            t = base + j
+            if t < n
+                if neg
+                    _submul_ui!(acc[t + 1], f[j], mag)
+                else
+                    _addmul_ui!(acc[t + 1], f[j], mag)
+                end
+            else
+                if neg
+                    _addmul_ui!(acc[t - n + 1], f[j], mag)
+                else
+                    _submul_ui!(acc[t - n + 1], f[j], mag)
+                end
+            end
+        end
+    end
+    return acc
+end
+
+"The `Int64` tier of [`_negacyclic_addmul!`](@ref).  No GMP, no allocation
+beyond the two working arrays."
+function _negacyclic_addmul_i64!(acc::Vector{BigInt}, f::Vector{BigInt},
+                                 ki::Vector{Int64}, n::Int)
+    fv = Vector{Int64}(undef, n)
+    @inbounds for j in 1:n
+        fv[j] = Int64(f[j])
+    end
+    av = zeros(Int64, n)
+    @inbounds for l in 1:n
+        k = ki[l]
+        k == 0 && continue
+        base = l - 2
+        for j in 1:n
+            t = base + j
+            p = k * fv[j]
+            if t < n
+                av[t + 1] += p
+            else
+                av[t - n + 1] -= p
+            end
+        end
+    end
+    @inbounds for i in 1:n
+        Base.GMP.MPZ.set_si!(acc[i], av[i])
+    end
+    return acc
+end
+
 function babai_reduce(f::Vector{BigInt}, g::Vector{BigInt},
-                      F::Vector{BigInt}, G::Vector{BigInt})
+                      F::Vector{BigInt}, G::Vector{BigInt};
+                      step::Integer = BABAI_STEP)
     n = length(f)
 
-    # A *deep* copy.  `copy(F)` duplicates the array but not the `BigInt`s in
-    # it, which was fine while the loop rebound `F[i]` to a freshly allocated
-    # result -- and is not fine now that it mutates them in place.  Getting this
-    # wrong would corrupt the caller's `(F, G)` silently.
+    # A *deep* copy: the loop below mutates these in place, and `copy(F)`
+    # duplicates the array but not the `BigInt`s in it, so a shallow copy would
+    # corrupt the caller's (F, G) (docs/debug_log.md #040).
     F = BigInt[Base.GMP.MPZ.set!(BigInt(), c) for c in F]
     G = BigInt[Base.GMP.MPZ.set!(BigInt(), c) for c in G]
 
-    size = max(53, maximum(bitsize, f), maximum(bitsize, g))
+    # ---- the scale budget --------------------------------------------------
+    #
+    # This is the branch's whole point.  The specification's Reduce, which the
+    # Python reference implements and `main` follows, derives the scaling of the
+    # correction from the *current* sizes:
+    #
+    #     size  = max(53, bits(f), bits(g))
+    #     shift = Size - size
+    #     k     = round( (F f* + G g*) / (f f* + g g*) )   from 53-bit approximations
+    #
+    # and then stops when `k` rounds to zero.  Working through the magnitudes,
+    # that `k` is about `2^(53 - bits(f))`.  Where f and g are *narrower* than
+    # 53 bits the correction is large and the reduction grinds along; where they
+    # are wider, `k` is about 2^0 and rounding it is a coin flip, so the
+    # reduction gives up with (F, G) still enormous.  Measured, that happens at
+    # every level below n = 128, and nine levels of reduction collapse into one
+    # run on 6240-bit coefficients (docs/debug_log.md #041).
+    #
+    # The C reference instead carries an explicit *bit budget* and marches it
+    # down: `k` is defined as the quotient divided by `2^scale_k`, with
+    # `scale_k` starting at `bits(F,G) - bits(f,g)` and dropping by 25 each
+    # pass.  Because the scaling comes from the schedule rather than from the
+    # current sizes, `k` is a meaningful integer of about 25 bits every time and
+    # never rounds away.  [C-ref] keygen.c:3165-3300 (`solve_NTRU_intermediate`)
+    #
+    # The subtraction is the same one either way -- `(F, G) -= k*(f, g)` scaled
+    # -- so `f*G - g*F` is preserved exactly, and the result is still a valid
+    # solution of the NTRU equation.  It is a *different* valid solution:
+    # Babai reduction is not canonical, and this branch therefore does not
+    # reproduce the Python reference's (F, G).  See README.md.
+    bits_f = maximum(bitsize, f)
+    bits_g = maximum(bitsize, g)
+    size_fg = max(bits_f, bits_g)
+    scale_fg = max(0, size_fg - 53)
+    scale_k = max(0, max(maximum(bitsize, F), maximum(bitsize, G)) - size_fg)
 
-    # Top 53 bits of each coefficient: exactly representable as Float64.
-    # `>>` on a negative BigInt is an arithmetic shift (floor division by a
-    # power of two), matching Python's `>>`.  Julia agrees with Python here;
-    # it is `div` vs `fld` that disagree (see xgcd_floor).
-    fa = Float64[Float64(c >> (size - 53)) for c in f]
-    ga = Float64[Float64(c >> (size - 53)) for c in g]
+    fa = Float64[Float64(c >> scale_fg) for c in f]
+    ga = Float64[Float64(c >> scale_fg) for c in g]
     fa_fft = fft(fa)
     ga_fft = fft(ga)
     den_fft = add_fft(mul_fft(fa_fft, adj_fft(fa_fft)),
                       mul_fft(ga_fft, adj_fft(ga_fft)))
 
-    # Scratch reused across iterations.  This loop runs 261 times at n = 128 in
-    # a FALCON-512 key generation, and that one call was 83% of the whole
-    # (docs/debug_log.md #040).
     Fa = Vector{Float64}(undef, n)
     Ga = Vector{Float64}(undef, n)
     tmp = BigInt()
-    acc = BigInt()
+    scratch = BigInt()
+    # `ki` in machine integers: the correction is bounded by the schedule, and
+    # a `Vector{BigInt}` here would allocate n GMP objects per pass and then
+    # hand them to `karamul`, which allocates a tree of temporaries of its own.
+    ki = Vector{Int64}(undef, n)
+    accF = BigInt[BigInt() for _ in 1:n]
+    accG = BigInt[BigInt() for _ in 1:n]
 
     while true
-        Size = max(53, maximum(bitsize, F), maximum(bitsize, G))
-        Size < size && break
-
-        sh = Size - 53
+        Size = max(maximum(bitsize, F), maximum(bitsize, G))
+        scale_FG = max(0, Size - 53)
         @inbounds for i in 1:n
-            Base.GMP.MPZ.fdiv_q_2exp!(acc, F[i], sh); Fa[i] = Float64(acc)
-            Base.GMP.MPZ.fdiv_q_2exp!(acc, G[i], sh); Ga[i] = Float64(acc)
+            Base.GMP.MPZ.fdiv_q_2exp!(scratch, F[i], scale_FG); Fa[i] = Float64(scratch)
+            Base.GMP.MPZ.fdiv_q_2exp!(scratch, G[i], scale_FG); Ga[i] = Float64(scratch)
         end
         Fa_fft = fft(Fa)
         Ga_fft = fft(Ga)
 
         num_fft = add_fft(mul_fft(Fa_fft, adj_fft(fa_fft)),
                           mul_fft(Ga_fft, adj_fft(ga_fft)))
-        k = ifft(div_fft(num_fft, den_fft))
-        ki = BigInt[BigInt(round(elt)) for elt in k]
-        all(iszero, ki) && break
+        ratio = ifft(div_fft(num_fft, den_fft))
 
-        fk = karamul(f, ki)
-        gk = karamul(g, ki)
-        shift = Size - size
-
-        # `F[i] -= fk[i] << shift` is what this says, and written that way it
-        # was **64% of key generation**: `fk[i]` is about 56 bits and `shift` is
-        # about 6250, so each coefficient allocated a ~790-byte BigInt that is
-        # almost entirely zeros, and then another for the difference.  Two
-        # allocations per coefficient, 256 per iteration, 261 iterations.
-        #
-        # In place, GMP does the same arithmetic into memory that already
-        # exists.  The limb count is unchanged; what goes away is the
-        # allocation and the collector behind it (docs/debug_log.md #040).
+        # `ratio` is the true quotient F/f scaled by 2^(scale_fg - scale_FG);
+        # we want it scaled by 2^(-scale_k), so correct by 2^(-dc).
+        dc = scale_k - scale_FG + scale_fg
+        nonzero = false
         @inbounds for i in 1:n
-            Base.GMP.MPZ.mul_2exp!(tmp, fk[i], shift)
-            Base.GMP.MPZ.sub!(F[i], tmp)
-            Base.GMP.MPZ.mul_2exp!(tmp, gk[i], shift)
-            Base.GMP.MPZ.sub!(G[i], tmp)
+            x = ldexp(real(ratio[i]), -dc)
+            # A correction that does not fit an Int64 means the descent has
+            # gone wrong for this (f, g); the reference bails out and lets key
+            # generation resample, and so do we.
+            isfinite(x) && abs(x) < 9.0e18 ||
+                throw(NTRUSolveFailure("Babai correction out of range; resample f, g"))
+            k = round(Int64, x)
+            ki[i] = k
+            nonzero |= (k != 0)
         end
+
+        if nonzero
+            _negacyclic_addmul!(accF, f, ki, bits_f)
+            _negacyclic_addmul!(accG, g, ki, bits_g)
+            @inbounds for i in 1:n
+                if scale_k == 0
+                    Base.GMP.MPZ.sub!(F[i], accF[i])
+                    Base.GMP.MPZ.sub!(G[i], accG[i])
+                else
+                    Base.GMP.MPZ.mul_2exp!(tmp, accF[i], scale_k)
+                    Base.GMP.MPZ.sub!(F[i], tmp)
+                    Base.GMP.MPZ.mul_2exp!(tmp, accG[i], scale_k)
+                    Base.GMP.MPZ.sub!(G[i], tmp)
+                end
+            end
+        end
+
+        # Unlike the specification's loop, an all-zero `k` is *not* a stopping
+        # condition -- it just means this pass had nothing to remove at this
+        # scale.  The loop is bounded by the schedule instead.
+        scale_k <= 0 && break
+        scale_k = max(0, scale_k - Int(step))
     end
     return (F, G)
 end
@@ -535,7 +792,8 @@ no reason to be coprime.
 Corresponds to `NTRUSolve` of the specification.
 [Py-ref] scripts/pyref/ntrugen.py:166-186
 """
-function ntru_solve(f::Vector{BigInt}, g::Vector{BigInt}; q::Integer = Q)
+function ntru_solve(f::Vector{BigInt}, g::Vector{BigInt}; q::Integer = Q,
+                    step::Integer = BABAI_STEP)
     _checklen(f, g)
     n = length(f)
     if n == 1
@@ -547,14 +805,15 @@ function ntru_solve(f::Vector{BigInt}, g::Vector{BigInt}; q::Integer = Q)
     end
     fp = field_norm(f)
     gp = field_norm(g)
-    Fp, Gp = ntru_solve(fp, gp; q = q)
+    Fp, Gp = ntru_solve(fp, gp; q = q, step = step)
     F = karamul(lift(Fp), galois_conjugate(g))
     G = karamul(lift(Gp), galois_conjugate(f))
-    return babai_reduce(f, g, F, G)
+    return babai_reduce(f, g, F, G; step = step)
 end
 
-ntru_solve(f::AbstractVector{<:Integer}, g::AbstractVector{<:Integer}; q::Integer = Q) =
-    ntru_solve(BigInt.(f), BigInt.(g); q = q)
+ntru_solve(f::AbstractVector{<:Integer}, g::AbstractVector{<:Integer}; q::Integer = Q,
+           step::Integer = BABAI_STEP) =
+    ntru_solve(BigInt.(f), BigInt.(g); q = q, step = step)
 
 """
     ntru_equation_residual(f, g, F, G) -> Vector{BigInt}
@@ -706,6 +965,247 @@ function gen_poly(n::Integer, randombytes)
     return f
 end
 
+# ---------------------------------------------------------------------------
+# The C reference's Gaussian sampler for f and g  (THIS BRANCH ONLY)
+# ---------------------------------------------------------------------------
+#
+# `gen_poly` above follows the specification and the Python reference: draw 4096
+# values from `samplerz` at `SIGMA_FG_BASE` and fold them 4096/n at a time.  It
+# is correct and it is expensive -- 4096 runs of a rejection sampler with an
+# exponential in it, per polynomial, and roughly nine candidate (f, g) pairs are
+# thrown away per accepted key.
+#
+# The C reference gets the *same distribution* a different way: a cumulative
+# distribution table for the n = 1024 Gaussian, summed `2^(10-logn)` times.  At
+# n = 512 that is 1024 table draws instead of 4096 rejection-sampler runs.
+#
+# The distributions really are the same, which is worth checking rather than
+# assuming.  C's table is for `sigma = 1.17*sqrt(q/(2N))` with N = 1024, i.e.
+# 2.866; summing `2^(10-logn)` of them gives `2.866 * sqrt(2^(10-logn))`.  Ours
+# is `SIGMA_FG_BASE * sqrt(4096/n)` = `1.433 * sqrt(4096/n)`.  At n = 1024 both
+# are 2.866; at n = 512 both are 4.0538.  The test suite asserts this.
+#
+# It also fixes something else.  C forces the sum of the coefficients to be
+# **odd**, so that `Res(f, x^n+1)` is odd and the binary GCD at the bottom of
+# the descent cannot fail on a common factor of 2.  Measured here, a third of
+# all descents were being thrown away on `gcd != 1` without it.
+#
+# [C-ref] keygen.c:2258-2264 (the table's definition and its sigma)
+# [C-ref] keygen.c:2266-2292 (`gauss_1024_12289`, transcribed below)
+# [C-ref] keygen.c:4095-4131 (`mkgauss`, `poly_small_mkgauss`)
+
+"""
+    GAUSS_1024_12289
+
+Cumulative distribution table for the discrete Gaussian with
+`sigma = 1.17*sqrt(q/(2N))`, `q = 12289`, `N = 1024`, scaled by `2^63`.
+
+Entry 0 is `P(x = 0)`.  For `k > 0`, entry `k` is `P(x >= k+1 | x > 0)`.
+
+Transcribed from the C reference, not derived: these are 27 exact 63-bit
+integers and re-deriving them would introduce rounding differences.
+[C-ref] keygen.c:2266-2292
+"""
+const GAUSS_1024_12289 = UInt64[
+    0x11d137d82df2ab58, 0x590c40f63ff5f974, 0x3898e41d85b975b7,
+    0x20a964ef50858ff9, 0x1107d1ae973857eb, 0x07fe1ec29220ea37,
+    0x035dafcacd37a439, 0x0144d98306216d42, 0x006d6beeeaf81655,
+    0x0020e1a00d6fa84c, 0x0008cdddcd9dda9c, 0x0002192fc3dcdcb4,
+    0x000071dfcd3c57e9, 0x00001574938d76eb, 0x000003974b0c33e5,
+    0x000000889d3da6fe, 0x0000001204ddc6cb, 0x000000021bd3b27a,
+    0x0000000038091f5e, 0x0000000005287db0, 0x00000000006bc528,
+    0x000000000007cbfb, 0x0000000000007ffc, 0x0000000000000746,
+    0x000000000000005e, 0x0000000000000004, 0x0000000000000000
+]
+
+"""
+    mkgauss(randombytes, logn) -> Int
+
+One coefficient of `f` or `g`, distributed as the sum of `2^(10-logn)` draws
+from [`GAUSS_1024_12289`](@ref).
+
+Each draw consumes two 64-bit words, little-endian, exactly as the C reference
+does: the first supplies the sign and decides whether the value is zero, the
+second indexes into the table.
+
+CONSTANT TIME: the C reference scans the whole table every draw and combines
+with masks precisely so the running time does not depend on the value sampled.
+That is reproduced here -- the loop has no early exit -- but Julia gives no
+guarantee that `ifelse` compiles to a branch-free select, so this is *shaped*
+like constant-time code without being it.  The distinction matters: `f` and `g`
+are the secret key.
+
+[C-ref] keygen.c:4095-4131 (`mkgauss`)
+"""
+function mkgauss(randombytes, logn::Integer)
+    return mkgauss_u64(_u64_reader(randombytes), logn)
+end
+
+"Adapt a `randombytes`-style callable into a zero-argument 64-bit reader."
+_u64_reader(randombytes) = function ()
+    b = randombytes(8)
+    r = UInt64(0)
+    @inbounds for i in 1:8
+        r |= UInt64(b[i]) << (8 * (i - 1))
+    end
+    return r
+end
+
+"""
+    mkgauss_u64(next64, logn) -> Int
+
+[`mkgauss`](@ref) over a source that hands out 64-bit words directly.
+
+This is the form the sampler actually wants.  Going through
+`randombytes(8) -> Vector{UInt8}` allocates twice per draw, and at 1024 draws
+per polynomial and roughly fourteen candidate polynomials per accepted key that
+came to 58284 allocations per key (docs/debug_log.md #043).
+"""
+function mkgauss_u64(next64, logn::Integer)
+    g = 1 << (10 - Int(logn))
+    val = 0
+    for _ in 1:g
+        r = next64()
+        neg = Int(r >> 63)
+        r &= ~(UInt64(1) << 63)
+        # `fl` becomes true when the value is zero, i.e. when r < table[0].
+        fl = r < @inbounds(GAUSS_1024_12289[1])
+
+        r = next64()
+        r &= ~(UInt64(1) << 63)
+        v = 0
+        @inbounds for k in 2:length(GAUSS_1024_12289)
+            t = r >= GAUSS_1024_12289[k]
+            v = ifelse(t & !fl, k - 1, v)      # first k with r >= table[k]
+            fl |= t
+        end
+        val += neg == 1 ? -v : v
+    end
+    return val
+end
+
+"""
+Wrap a `randombytes` callable in a buffer and hand out 64-bit words.
+
+The buffer is refilled `_U64_BLOCK` bytes at a time.  Note that this changes
+*when* the underlying source is asked for bytes, though not the values it
+produces in sequence -- a replay source with an exact budget will be asked for
+more than it holds, which is why this is used only on the CDT path, where no
+recorded byte count exists to match.
+
+512 is not a tunable: it is the largest single request the reference ChaCha20
+PRNG will serve, because that is its internal buffer (`randombytes!` in
+shake.jl throws above it).  Asking for 4096 -- which is what the first version
+of this did -- fails outright.  See docs/debug_log.md #043.
+"""
+const _U64_BLOCK = 512
+
+"""
+    BufferedU64(randombytes)
+
+A callable that hands out 64-bit words, refilling from `randombytes` in
+[`_U64_BLOCK`](@ref)-byte blocks.
+
+This is a `mutable struct` with a type parameter on the source, and not the
+closure it started life as, for a reason worth writing down.  The closure
+version reassigned its captured buffer (`buf = randombytes(...)`) from inside
+the returned function; Julia answers that by boxing the capture in a
+`Core.Box`, whose element type is `Any`.  Every subsequent `buf[i]` is then a
+dynamic dispatch returning a boxed value.  Measured, that cost a factor of
+about seven on the whole sampler (docs/debug_log.md #043).
+
+A callable struct captures the same state with the same lifetime and stays
+concretely typed, so `next()` inlines to a bounds check and a load.
+"""
+mutable struct BufferedU64{F}
+    src::F
+    buf::Vector{UInt8}
+    pos::Int      # bytes of `buf` already consumed
+end
+
+BufferedU64(src) = BufferedU64(src, UInt8[], 0)
+
+"""
+Load a little-endian `UInt64` from `buf[i:i+7]`.
+
+On a little-endian machine that is exactly the memory image, so it is one
+unaligned 8-byte load; elsewhere it has to be assembled a byte at a time.  The
+byte order is the C reference's, not the machine's, so the branch is on
+`ENDIAN_BOM` and not left to `reinterpret`.
+"""
+@inline function _load_u64_le(buf::Vector{UInt8}, i::Int)
+    @boundscheck checkbounds(buf, i:(i + 7))
+    if ENDIAN_BOM == 0x04030201            # little-endian host
+        return GC.@preserve buf unsafe_load(Ptr{UInt64}(pointer(buf, i)))
+    else
+        r = UInt64(0)
+        @inbounds for k in 0:7
+            r |= UInt64(buf[i + k]) << (8 * k)
+        end
+        return r
+    end
+end
+
+@inline function (b::BufferedU64)()
+    p = b.pos
+    if p + 8 > length(b.buf)
+        b.buf = b.src(_U64_BLOCK)
+        p = 0
+    end
+    b.pos = p + 8
+    return @inbounds _load_u64_le(b.buf, p + 1)
+end
+
+"Deprecated spelling kept so existing call sites read the same."
+_buffered_u64_reader(randombytes) = BufferedU64(randombytes)
+
+"""
+    gen_poly_cdt(n, randombytes) -> Vector{BigInt}
+
+`f` or `g`, sampled with [`mkgauss`](@ref) rather than by folding `samplerz`.
+
+Two constraints from the C reference are enforced by resampling the offending
+coefficient:
+
+  * `|c| <= 127`, so the coefficient fits the byte the key format stores it in;
+  * the **sum of all coefficients is odd**, which makes `Res(f, x^n+1)` odd and
+    stops the binary GCD at the bottom of the descent failing on a factor of 2.
+
+The second is the interesting one: without it, a third of all descents here
+were being discarded on `gcd != 1`.
+
+[C-ref] keygen.c:4095-4131 (`poly_small_mkgauss`)
+"""
+function gen_poly_cdt(n::Integer, randombytes)
+    ni = Int(n)
+    logn = trailing_zeros(ni)
+    (1 << logn) == ni || throw(ArgumentError("n must be a power of two, got $ni"))
+    logn <= 10 || throw(ArgumentError("gen_poly_cdt is defined for n <= 1024"))
+    # Sampled into `Int` and converted at the end.  Writing straight into a
+    # `Vector{BigInt}` would allocate a GMP object per coefficient inside the
+    # rejection loop, which is the hot loop.
+    fi = Vector{Int}(undef, ni)
+    mod2 = 0
+    # One buffered reader for the whole polynomial: the source is asked for
+    # half a kilobyte at a time instead of eight bytes two thousand times over.
+    next64 = BufferedU64(randombytes)
+    for u in 1:ni
+        while true
+            s = mkgauss_u64(next64, logn)
+            (-127 <= s <= 127) || continue
+            if u == ni
+                # the last coefficient must make the total odd
+                (mod2 ⊻ (s & 1)) == 0 && continue
+            else
+                mod2 ⊻= (s & 1)
+            end
+            fi[u] = s
+            break
+        end
+    end
+    return BigInt[BigInt(c) for c in fi]
+end
+
 """
     ntru_gen(n, randombytes; q = Q, max_attempts = 1000) -> (f, g, F, G)
 
@@ -736,13 +1236,37 @@ CONSTANT TIME: key generation is the one part of FALCON where variable time is
 broadly accepted -- it runs once, and its timing does not correlate with any
 per-message secret. The rejection loop above is proudly data-dependent.
 """
-function ntru_gen(n::Integer, randombytes; q::Integer = Q, max_attempts::Integer = 1000)
+function ntru_gen(n::Integer, randombytes; q::Integer = Q, max_attempts::Integer = 1000,
+                 sampler::Symbol = :cdt)
+    # THIS BRANCH defaults to the C reference's CDT sampler rather than the
+    # specification's fold of `samplerz`.  Same distribution, different
+    # realisation; see `gen_poly_cdt` and README.md.
+    #
+    # `sampler = :spec` selects the specification's `gen_poly`, and with it this
+    # function still reproduces the Python reference's (f, g, F, G) byte for
+    # byte -- which is what the reference-comparison tests use.  Keeping both
+    # reachable is the point: the fast path is checked by properties, and the
+    # slow path keeps the recorded vectors meaningful.
+    gen = if sampler === :cdt
+        gen_poly_cdt
+    elseif sampler === :spec
+        gen_poly
+    else
+        throw(ArgumentError("sampler must be :cdt or :spec, got :$sampler"))
+    end
     for _ in 1:max_attempts
-        f = gen_poly(n, randombytes)
-        g = gen_poly(n, randombytes)
+        f = gen(n, randombytes)
+        g = gen(n, randombytes)
 
+        # The cheap test first, as the C reference does: if the plain squared
+        # norm of (f, g) already exceeds the bound then the Gram-Schmidt norm
+        # certainly does, and the FFT that `gs_norm` would run is wasted.  Same
+        # predicate, in two stages.  [C-ref] keygen.c:4238-4243
+        fi = Int.(f); gi = Int.(g)
+        plain = sum(abs2, fi) + sum(abs2, gi)
+        plain >= 16823 && continue
         gs_norm(Float64.(f), Float64.(g); q = q) > gram_schmidt_quality()^2 * q && continue
-        is_invertible_zq(Int.(f)) || continue
+        is_invertible_zq(fi) || continue
 
         try
             F, G = ntru_solve(f, g; q = q)

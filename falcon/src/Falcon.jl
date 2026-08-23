@@ -1,8 +1,19 @@
 """
     Falcon
 
-A specification-conformant Julia implementation of FALCON / FN-DSA
-(NIST FIPS 206, draft).
+A specification-conformant Julia implementation of FALCON.
+
+The document this code is conformant *to* is **Falcon Specification v1.2
+(01/10/2020)**, the round-3 submission -- see `docs/refs.md` and
+`test/test_spec.jl`, which transcribe its tables.  FN-DSA is the name NIST
+gave Falcon for **FIPS 206**, and as of 2026-08-21 **FIPS 206 does not exist**:
+no initial public draft has been published, and NIST's own status update says
+it is still in clearance.  So nothing here is FIPS 206 conformant, and nothing
+anywhere is.  What NIST has announced it will change -- domain separation via
+an ML-DSA-style `mu`, a `ctx` string, randomized-only signing, an infinity-norm
+bound of 840, NTT-format public keys, little-endian encodings -- is listed in
+docs/refs.md and is **not** reflected here.  Read "FN-DSA" in this repository
+as "Falcon, the algorithm that became FN-DSA", not as a conformance claim.
 
 Scope and non-goals
 -------------------
@@ -44,7 +55,7 @@ export SHAKE256XOF, shake256_xof, absorb!, squeeze!, shake256
 export ChaCha20, chacha20, randombytes!
 
 # --- module 3 --------------------------------------------------------------
-export polyadd, polysub, polyneg, polymul, polyadj, sqnorm
+export polyadd, polysub, polyneg, polymul, polyadj, sqnorm, sqnorm_machine
 export polyaddq, polysubq, polymulq, centered
 export polysplit, polymerge
 
@@ -63,15 +74,19 @@ export set_fft_roots!, reset_fft_roots!, with_fft_roots
 export karamul, galois_conjugate, field_norm, lift, bitsize
 export ntru_solve, NTRUSolveFailure, ntru_equation_residual, ntru_equation_holds
 export gs_norm, gs_norm_ok, gen_poly, ntru_gen, SIGMA_FG_MIN
+export mkgauss, mkgauss_u64, gen_poly_cdt, GAUSS_1024_12289   # branch variant, see README
 
 # --- module 7 --------------------------------------------------------------
-export samplerz, basesampler, approxexp, berexp
+export samplerz, samplerz_isigma, basesampler, approxexp, berexp
 export RCDT, EXP_COEFFS, bytesource, ReplayBytes
 
 # --- module 8 --------------------------------------------------------------
 export FalconTree, FFLDLNode, FFLDLLeaf
 export gram_fft, ldl_fft, ffldl_fft, normalize_tree!, falcon_tree
 export ffnp_fft, ffsampling_fft, leaf_sigmas, node_l10s, nleaves, treedepth
+export with_spec_ffsampling, with_spec_spelling
+export FFSAMPLING_CREF, CDIV_CREF, LDL_CREF
+export with_fma, FMA_FFT
 
 # --- module 9 --------------------------------------------------------------
 export encode_pubkey, decode_pubkey, encode_privkey, decode_privkey, recover_G

@@ -253,4 +253,225 @@
         @test all(c -> 0 <= c < Q, pt)
         @test length(unique(pt)) > 500          # not degenerate
     end
+
+    @testset "signing reproduces the C reference byte for byte" begin
+        # THIS BRANCH's headline result (docs/debug_log.md #050).
+        #
+        # Since #025 this project could verify the C reference's signatures but
+        # not *produce* them: given the same key, message and randomness, the
+        # two implementations returned different (valid) signatures.  #048
+        # bisected the floating-point path and found three places where the
+        # specification's formulas and the reference's spelling are
+        # algebraically identical and differ in rounding.  With those three
+        # respelled -- complex division, LDL*'s D11, and the bottom two levels
+        # of ffSampling -- plus the reference's reciprocal leaf convention and
+        # its `fpr_inv_sigma` table, signing agrees exactly.
+        #
+        # The vectors are the C reference's own output, recorded by
+        # scripts/gen_cref_sign_kat.jl through a shim that seeds the sampler's
+        # ChaCha20 state directly (scripts/cref_shim.c), so the byte stream is
+        # pinned as well as the key and the message.  Regenerating them needs a
+        # C compiler; checking them does not.
+        p = FALCON_512
+        @test length(CREF_SIGN_KAT) == 8
+        for (f, g, F, G, salt, state, pt, want_s2, want_bytes) in CREF_SIGN_KAT
+            sk = expand_privkey(f, g, F, G, p)
+
+            # 1. the expanded key: same basis, same tree
+            @test length(leaf_sigmas(sk.tree)) == p.n
+
+            # 2. the sampled short vector, from the same 56-byte PRNG state
+            rng = chacha20(state)
+            s1, s2 = Falcon.sample_preimage(sk, pt, k -> randombytes!(rng, k))
+            @test Int.(s2) == want_s2
+
+            # 3. the compressed bytes.  C's encoder returns the natural length;
+            #    the padded format zero-fills to sig_bytes - 41, which is what
+            #    `compress_sig` produces.
+            ours = compress_sig(Int.(s2), p.sig_bytes - 41)
+            @test ours !== nothing
+            @test ours[1:length(want_bytes)] == want_bytes
+            @test all(iszero, ours[(length(want_bytes) + 1):end])
+
+            # 4. and it is a signature that verifies, which the equality above
+            #    does not by itself establish.
+            h = polydivq(Int[mod(c, p.q) for c in g], Int[mod(c, p.q) for c in f])
+            pk = FalconPublicKey(p, h)
+            sig = encode_signature(salt, Int.(s2), p.logn, p.sig_bytes)
+            @test sig !== nothing
+            @test sqnorm(s1, s2) <= p.sig_bound
+        end
+    end
+
+    @testset "the two spellings differ in bits, and agree on these 8 vectors" begin
+        # The finding whose interpretation this project got wrong three times
+        # and then corrected (docs/debug_log.md #048, #050, #053, #054, #056).
+        #
+        # #048 identified three places where the specification's formulas and
+        # the C reference's spelling are algebraically identical and round
+        # differently.  The tempting conclusion -- that these differences never
+        # reach the signature -- was asserted here on the strength of 480
+        # signatures showing zero divergence.  That was under-powered: the
+        # divergence rate is on the order of 1e-5 per signature (A1, the
+        # hand-unrolled bottom levels, at 5e-5; A2, complex division and D11,
+        # at 7.5e-6 -- scripts/divergence_rate.jl), and 480 signatures cannot
+        # distinguish 1e-5 from 0.  The mechanism is NOT a sub-ulp BerExp
+        # margin as once claimed here; it is `s = floor(mu)` straddling an
+        # integer centre (ePrint 2024/1709, Lemma 1), which is a difference of
+        # exactly 1, not a rare coin flip.
+        #
+        # What is true, and all this test now asserts, is narrower: the
+        # arithmetic genuinely differs bit-for-bit, and on these 8 specific KAT
+        # vectors the two spellings happen to agree (none is one of the rare
+        # divergent cases).  The divergence itself is measured, at scale, in
+        # scripts/divergence_rate.jl, not here.
+        p = FALCON_512
+
+        # (a) the arithmetic really is different -- otherwise (b) is vacuous
+        let a = ComplexF64(1.0, 3.0), b = ComplexF64(7.0, 11.0)
+            @test Falcon._cdiv_cref(a, b) != a / b
+        end
+
+        # (b) on these 8 vectors specifically, both spellings give C's output.
+        #     This is NOT a claim that they always agree -- see #056.
+        for (f, g, F, G, salt, state, pt, want_s2, _) in CREF_SIGN_KAT
+            sk = expand_privkey(f, g, F, G, p)
+            r1 = chacha20(state); r2 = chacha20(state)
+            _, a = Falcon.sample_preimage(sk, pt, k -> randombytes!(r1, k))
+            _, b = with_spec_ffsampling() do
+                Falcon.sample_preimage(sk, pt, k -> randombytes!(r2, k))
+            end
+            @test Int.(a) == Int.(b)
+            @test Int.(a) == want_s2
+        end
+    end
+
+    @testset "blind which-call solve: rank-2 lift recovers f without labels" begin
+        # docs/debug_log.md #075, docs/paper.md sec 6.6.  The first-two event
+        # channel with UNKNOWN which-call label: each event gives one of two rows
+        # a=form_row(c,k1), b=form_row(c,k2), one satisfying row.f=0.  Since
+        # b = x^{n/2} a, the disjunction is (a.f)(a.f')=0 with f'=-x^{n/2}f, a
+        # linear measurement on the rank-2 S=sym(f f'^T).  Checked at n=16 with a
+        # fixed seed: S is pinned (kernel dim 1) and its column space contains f.
+        qq = 12289
+        nn = 16; k1 = nn ÷ 2 - 1; k2 = nn - 1; Dd = nn*(nn+1) ÷ 2
+        rng = MersenneTwister(20260823)
+        fsec = Int[rand(rng, -5:5) for _ in 1:nn]; fsec[1] = fsec[1] == 0 ? 1 : fsec[1]
+        shp(v, m) = Int[(i = j - m; i >= 0 ? v[i+1] : -v[i+nn+1]) for j in 0:nn-1]
+        fp = mod.(-shp(fsec, nn ÷ 2), qq)
+        frw(c, k) = Int[(i = k - j; mod(i >= 0 ? c[i+1] : -c[i+nn+1], qq)) for j in 0:nn-1]
+        sm(a) = (o = Int[]; for i in 1:nn, j in i:nn; push!(o, i==j ? mod(a[i]*a[j], qq) : mod(2*a[i]*a[j], qq)); end; o)
+        function rrefq(M0)
+            M = [mod(x, qq) for x in M0]; rows, cols = size(M); piv = Int[]; r = 1
+            for col in 1:cols
+                pr = findfirst(i -> M[i,col] % qq != 0, r:rows); pr === nothing && continue; pr += r - 1
+                M[r,:], M[pr,:] = M[pr,:], M[r,:]; iv = invmod(M[r,col], qq); M[r,:] = mod.(M[r,:] .* iv, qq)
+                for i in 1:rows; i == r && continue; fc = M[i,col]; fc == 0 && continue; M[i,:] = mod.(M[i,:] .- fc .* M[r,:], qq); end
+                push!(piv, col); r += 1; r > rows && break
+            end
+            M, piv
+        end
+        meas = Vector{Int}[]
+        for _ in 1:Int(round(1.6*Dd))
+            k = rand(rng, (k1, k2)); c = Int[rand(rng, 0:qq-1) for _ in 1:nn]
+            row = frw(c, k); sv = mod(sum(row[j]*fsec[j] for j in 1:nn), qq)
+            j0 = findfirst(j -> gcd(fsec[j], qq) == 1, 1:nn); p0 = k - (j0-1)
+            if p0 >= 0; c[p0+1] = mod(c[p0+1] - sv*invmod(fsec[j0], qq), qq)
+            else; c[p0+nn+1] = mod(c[p0+nn+1] + sv*invmod(fsec[j0], qq), qq) end
+            push!(meas, sm(frw(c, k1)))          # solver only ever forms a_i (row at k1)
+        end
+        A = reduce(vcat, [reshape(r, 1, :) for r in meas])
+        R, piv = rrefq(A); free = setdiff(1:Dd, piv)
+        @test length(free) == 1                  # S pinned up to scale (kernel dim 1)
+        Svec = zeros(Int, Dd); Svec[free[1]] = 1
+        for (ri, cc) in enumerate(piv); Svec[cc] = mod(-R[ri, free[1]], qq); end
+        S = zeros(Int, nn, nn); t = 1
+        for i in 1:nn, j in i:nn; S[i,j] = Svec[t]; S[j,i] = Svec[t]; t += 1; end
+        # colspace(S) contains f  <=>  rank[S | f] == rank[S]
+        _, ps = rrefq(S); _, pa = rrefq(hcat(S, reshape(mod.(fsec, qq), nn, 1)))
+        @test length(ps) == 2                     # rank-2
+        @test length(pa) == length(ps)            # f is in the column space
+    end
+
+    @testset "the FMA arm, and the parity that closes the first two calls" begin
+        # docs/debug_log.md #070, docs/paper.md sec 6.6.
+        #
+        # (a) FMA_FFT is OFF by default.  Every byte-exact KAT above depends on
+        #     that, so this is the guard against a future edit flipping it.
+        @test Falcon.FMA_FFT[] == false
+
+        # (b) with_fma restores the flag even when the body throws.
+        @test_throws ErrorException with_fma(() -> error("boom"))
+        @test Falcon.FMA_FFT[] == false
+
+        # (c) the arm is not a no-op, and -- the reason it is `fma` and not
+        #     `muladd` -- it is not a no-op in EVERY build configuration.  The
+        #     first version of this arm used `muladd`, which is only permitted
+        #     to fuse: LLVM contracted it inside merge_fft's loop, declined
+        #     inside mul_fft's comprehension, and declined in both under
+        #     --check-bounds=yes, so this very assertion passed under `julia
+        #     script.jl` and failed under `Pkg.test()`.  That is a faithful
+        #     picture of the hazard sec 6.6 is about and a useless experimental
+        #     arm.  `fma` rounds once by specification.
+        let a = ComplexF64(0.1, 1.0), b = ComplexF64(0.2, 0.020000000000000004)
+            @test Falcon._cmul_fma(a, b) != a * b
+        end
+        n = 512
+        v = Float64[Float64(mod(7*i*i + 3i, 12289)) for i in 1:n]
+        w = Float64[Float64(mod(5*i*i + 11i, 12289)) for i in 1:n]
+        @test polymul_fft(v, w) != with_fma(() -> polymul_fft(v, w))
+
+        # (d) the parity theorem of sec 6.6.  With `round` in place of `floor`
+        #     (ePrint 2024/1709 Algorithm 4) the sensitive centres are the
+        #     half-integers, and a first-two centre is N/q with N an integer.
+        #     N/q = m + 1/2 needs 2N = q(2m+1): even on the left, odd on the
+        #     right.  So for odd q it never happens -- part 1 of that
+        #     countermeasure closes the first two sampler calls unconditionally.
+        #     Checked exhaustively over the numerator's residues mod 2q.
+        q = FALCON_512.q
+        @test isodd(q)
+        @test !any(N -> mod(2N, 2q) == mod(q, 2q), 0:(2q - 1))
+    end
+
+    @testset "key recovery algebra (ePrint 2024/1709 sec 5.1)" begin
+        # The identity behind scripts/key_recovery.jl, which recovers the
+        # private key from a single A2 discrepant pair (docs/paper.md sec 6.1).
+        # A last-two-call divergence gives, over R = Z[x]/(x^n+1),
+        #     Δs0 = Δz0 · g,   Δz0 = a + b x^{n/2},
+        # and (a + b x^{n/2})(a - b x^{n/2}) = a^2 + b^2 because x^n = -1, so
+        #     g = Δs0 · (a - b x^{n/2}) / (a^2 + b^2)
+        # with no general ring inversion.  This tests that recovery on synthetic
+        # data, so the full 382-pair search in the script is regression-guarded
+        # without paying for the 70-key reproduction.
+        ringmul(u, v) = begin              # multiply in Z[x]/(x^n+1)
+            n = length(u); w = zeros(Int, n)
+            for i in 0:n-1, j in 0:n-1
+                k = i + j; c = u[i+1] * v[j+1]
+                w[mod(k, n) + 1] += k < n ? c : -c
+            end
+            w
+        end
+        mulsparse(v, a, b) = begin          # v * (a - b x^{n/2}) in the ring
+            n = length(v); h = n ÷ 2; out = a .* v
+            for k in 0:n-1
+                src = k - h
+                out[k+1] -= b * (src >= 0 ? v[src+1] : -v[src+n+1])
+            end
+            out
+        end
+        rng = MersenneTwister(0xFA1C0)
+        for n in (8, 16, 32), _ in 1:20
+            g = rand(rng, -12:12, n); f = rand(rng, -12:12, n)
+            a = rand(rng, -19:19); b = rand(rng, -19:19)
+            (a == 0 && b == 0) && continue
+            dz0 = zeros(Int, n); dz0[1] = a; dz0[n ÷ 2 + 1] = b
+            ds0 = ringmul(dz0, g); ds1 = ringmul(dz0, .-f)
+            d = a * a + b * b
+            grec = mulsparse(ds0, a, b) .÷ d
+            frec = .-(mulsparse(ds1, a, b) .÷ d)
+            @test all(iszero, mulsparse(ds0, a, b) .% d)   # exact division
+            @test grec == g
+            @test frec == f
+        end
+    end
 end

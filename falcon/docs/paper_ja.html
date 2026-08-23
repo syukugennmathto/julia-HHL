@@ -1,0 +1,582 @@
+<title>忠実な二羽のFALCON</title>
+<style>
+  :root {
+    --ground: #f5f6f9;
+    --surface: #ffffff;
+    --surface-2: #eef0f6;
+    --ink: #171922;
+    --ink-soft: #3d4152;
+    --muted: #676d81;
+    --hairline: #e0e3ec;
+    --hairline-strong: #ccd1df;
+    --accent: #3a3fa6;
+    --accent-soft: #ecedf8;
+    --accent-ink: #2b2f86;
+    --signal: #b23a1b;
+    --signal-soft: #f8ebe4;
+    --good: #1f7a54;
+    --good-soft: #e6f2ec;
+    --shadow: 0 1px 2px rgba(20,22,34,.04), 0 8px 30px rgba(20,22,34,.05);
+    --measure: 46em;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101117; --surface: #171922; --surface-2: #1e212c;
+      --ink: #e9eaf1; --ink-soft: #c2c6d4; --muted: #9298a9;
+      --hairline: #282b37; --hairline-strong: #363a49;
+      --accent: #9498f2; --accent-soft: #20223a; --accent-ink: #b9bcf7;
+      --signal: #ef8a63; --signal-soft: #2c2019; --good: #58c295; --good-soft: #16261f;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #101117; --surface: #171922; --surface-2: #1e212c;
+    --ink: #e9eaf1; --ink-soft: #c2c6d4; --muted: #9298a9;
+    --hairline: #282b37; --hairline-strong: #363a49;
+    --accent: #9498f2; --accent-soft: #20223a; --accent-ink: #b9bcf7;
+    --signal: #ef8a63; --signal-soft: #2c2019; --good: #58c295; --good-soft: #16261f;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif;
+    font-size: 17px; line-height: 1.85; -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-soft); }
+  .wrap { max-width: 830px; margin: 0 auto; padding: 0 28px 6rem; }
+  .col { max-width: var(--measure); }
+
+  h1, h2, h3 { font-family: "Noto Serif JP", serif; font-weight: 600; line-height: 1.4; color: var(--ink); }
+  h2 { font-size: 1.6rem; margin: 3.4rem 0 0.2rem; }
+  h3 { font-size: 1.18rem; margin: 2.1rem 0 0.2rem; }
+  p { margin: 0.9rem 0; }
+  a { color: var(--accent-ink); text-underline-offset: 2px; }
+  strong { font-weight: 700; color: var(--ink); }
+  .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 0.9em; }
+  .eyebrow { font-family: "JetBrains Mono", monospace; font-size: 0.7rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent-ink); font-weight: 600; }
+  .secnum { font-family: "JetBrains Mono", monospace; font-size: 0.72rem; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; display: block; margin-top: 3.4rem; margin-bottom: -2.6rem; }
+  .secnum + h2 { margin-top: 2.9rem; }
+
+  header.mast { padding: 4.5rem 0 2.2rem; border-bottom: 1px solid var(--hairline); }
+  .mast .eyebrow { display: block; margin-bottom: 1.1rem; }
+  .mast h1 { font-size: clamp(2.2rem, 6vw, 3.4rem); letter-spacing: 0.01em; margin: 0 0 1rem; line-height: 1.28; }
+  .mast .sub { font-size: 1.12rem; color: var(--ink-soft); margin: 0; }
+  .mast .meta { margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; font-family: "JetBrains Mono", monospace; font-size: 0.72rem; color: var(--muted); }
+  .mast .meta b { color: var(--ink-soft); font-weight: 500; }
+  .langbar { margin-top: 1rem; font-family: "JetBrains Mono", monospace; font-size: 0.74rem; }
+  .langbar a { color: var(--muted); }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 2.4rem 0 1rem; }
+  .stat { background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; padding: 1.1rem 1.15rem; box-shadow: var(--shadow); }
+  .stat .k { font-family: "JetBrains Mono", monospace; font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .stat .v { font-size: 1.7rem; font-weight: 700; margin: 0.35rem 0 0.15rem; }
+  .stat .v.sig { color: var(--signal); }
+  .stat .v.good { color: var(--good); }
+  .stat .d { font-size: 0.84rem; color: var(--muted); line-height: 1.6; }
+
+  .abstract { background: var(--surface); border: 1px solid var(--hairline); border-left: 3px solid var(--accent); border-radius: 10px; padding: 1.4rem 1.6rem; margin: 2.2rem 0; box-shadow: var(--shadow); }
+  .abstract .eyebrow { display:block; margin-bottom: 0.5rem; }
+  .abstract p { font-size: 0.96rem; color: var(--ink-soft); }
+  .abstract p:first-of-type { margin-top: 0.2rem; }
+
+  .note { border: 1px solid var(--hairline); border-left: 3px solid var(--signal); background: var(--signal-soft); border-radius: 8px; padding: 0.9rem 1.15rem; margin: 1.6rem 0; font-size: 0.93rem; color: var(--ink-soft); }
+  .note .eyebrow { color: var(--signal); display:block; margin-bottom: 0.35rem; }
+
+  .code-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 1.3rem 0; }
+  pre { margin: 0; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 10px; padding: 0.95rem 1.05rem; overflow-x: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.78rem; line-height: 1.7; color: var(--ink-soft); }
+  pre .lbl { display:block; font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.6rem; font-weight: 600; }
+  pre.pat-s .lbl { color: var(--accent-ink); }
+  pre.pat-c .lbl { color: var(--signal); }
+  .cm { color: var(--muted); }
+  code.inl { font-family: "JetBrains Mono", monospace; font-size: 0.82em; background: var(--surface-2); padding: 0.08em 0.35em; border-radius: 5px; border: 1px solid var(--hairline); }
+
+  .tbl-wrap { overflow-x: auto; margin: 1.4rem 0; border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; background: var(--surface); }
+  th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--hairline); }
+  thead th { font-family: "JetBrains Mono", monospace; font-size: 0.64rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+  tr.hl td { background: var(--accent-soft); }
+  tr.hl td:first-child { font-weight: 700; }
+  .win { color: var(--good); font-weight: 700; }
+  .lose { color: var(--signal); font-weight: 700; }
+  .pending { color: var(--signal); font-family: "JetBrains Mono", monospace; font-size: 0.82em; }
+
+  figure { margin: 1.8rem 0; }
+  figure svg { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; box-shadow: var(--shadow); }
+  figcaption { font-size: 0.82rem; color: var(--muted); margin-top: 0.7rem; line-height: 1.7; }
+  .dgm text { font-family: "JetBrains Mono", monospace; }
+  .dgm .t-mut { fill: var(--muted); } .dgm .t-ink { fill: var(--ink-soft); }
+  .dgm .t-sig { fill: var(--signal); } .dgm .t-acc { fill: var(--accent-ink); }
+  .dgm .ln { stroke: var(--hairline-strong); fill: none; } .dgm .ln-mark { stroke: var(--ink-soft); fill: none; }
+  .dgm .c-sig { fill: var(--signal); } .dgm .c-acc { fill: var(--accent); }
+  .dgm .panel { fill: var(--surface-2); stroke: var(--hairline); }
+  .dgm .jp { font-family: "Noto Serif JP", serif; }
+
+  ul, ol { padding-left: 1.3rem; } li { margin: 0.4rem 0; }
+  footer { border-top: 1px solid var(--hairline); margin-top: 3rem; padding-top: 1.6rem; font-size: 0.85rem; color: var(--muted); }
+  footer .mono { font-size: 0.76rem; }
+
+  @media (max-width: 680px) {
+    body { font-size: 16px; }
+    .stats { grid-template-columns: 1fr; }
+    .code-pair { grid-template-columns: 1fr; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+
+<div class="wrap">
+
+<header class="mast">
+  <span class="eyebrow">FALCON / FN-DSA · 実装研究</span>
+  <h1>忠実な二羽のFALCON</h1>
+  <p class="sub">仕様書に忠実な二つの実装が、同じメッセージに違う署名を返す。<strong>一つの実装を二通りにビルドしても返す</strong>― そしてその食い違いの三分の二は、秘密鍵をそのまま渡す。</p>
+  <div class="meta">
+    <span><b>独立実装</b> · Julia、仕様書から</span>
+    <span><b>参照実装</b> · round-3 v1.2 の C と Python</span>
+    <span><b>全数値に再現スクリプト</b></span>
+  </div>
+  <div class="langbar">日本語 &nbsp;/&nbsp; <a href="https://claude.ai/code/artifact/c08f849d-c2dd-4e82-8354-2ceb37bee75d">English version →</a></div>
+</header>
+
+<div class="col">
+
+<div class="stats">
+  <div class="stat">
+    <div class="k">再現</div>
+    <div class="v good">バイト一致</div>
+    <div class="d">我々の署名は、記録した全ベクタで C 参照実装とビット単位で一致する。</div>
+  </div>
+  <div class="stat">
+    <div class="k">提案された対策</div>
+    <div class="v sig">半分は無効</div>
+    <div class="d">§7.1 の part 1 は無害な位置しか免疫しない。入れた状態で鍵は取れる ― 3/3。</div>
+  </div>
+  <div class="stat">
+    <div class="k">参照実装 対 参照実装</div>
+    <div class="v sig">12件中8件</div>
+    <div class="d"><span class="mono">-ffp-contract=fast</span> で建てた C 参照実装は、自分自身と 10 万本中 12 本で食い違う。うち 8 組から秘密鍵が出て、8 件とも偽造が公開鍵に受理される。</div>
+  </div>
+</div>
+
+<div class="abstract">
+  <span class="eyebrow">要旨</span>
+  <p>FALCON ― NIST が FN-DSA として標準化する格子署名 ― は、選定された署名の中で唯一、出力が浮動小数点演算の関数になる。しかも仕様書の精度解析は、サンプラが出力する<em>分布</em>についてのものであって、二つの適合実装が同じバイト列を返すかどうかについてではない。我々は仕様書だけを読んで Julia で独立実装を書き、参照実装の署名を<strong>バイト単位で再現</strong>するまで突き合わせた。その突き合わせが、仕様書が中間値を決めていない箇所を 3 クラス炙り出す ― <em>演算の書き方</em>、<em>公開パラメータから導けない定数</em>、<em>使われているのに印字されていない ε</em>。</p>
+  <p>そのうち二つの書き方 ― 複素除算と <span class="mono">LDL*</span> の <span class="mono">D11</span> ― は署名を 40 万本あたり 3 本、率にして 7.5×10⁻⁶ で変える。しかも必ず最後の 2 回のサンプラ呼び出し、すなわち ePrint 2024/1709（Lin–Tibouchi–Yu–Zhang, EUROCRYPT 2025）が 1 ペアから秘密鍵の全復元に使う位置で。同論文が扱う摂動と違い、これは<em>仕様書</em>と<em>参照実装</em>の差であり、参照実装の両 signing mode に共通に存在し、同論文の対策では塞がらない。我々は同論文の機構を別経路から追認し、同論文が測っていない Heuristic 1 を直接検証する。</p>
+  <p>さらに二つの結果は、同論文が「使えない」として脇に置いた<strong>最初の 2 回</strong>に関わる。第一に、最初の 2 回の中心は厳密に <span class="mono">(c·f)[n/2−1] / q</span>、すなわち<em>秘密についての公開線形形式</em>である。だからそこでの整数中心は <span class="mono">F_q</span> 上の方程式 1 本にほかならず、<span class="mono">n−1</span> 個の<em>事象</em>を集めれば、差ベクトルも格子簡約も使わずにガウス消去だけで秘密鍵が戻る ― 実際に走らせた。第二に、そのチャネルが必要とするオラクルは、摂動の大きさについての<strong>両側の窓</strong>の中にだけ存在する。窓の両端を実測した。本稿自身の「書き方の差」は窓の<em>下</em>にある。しかし最適化オプション一つが窓の<em>中</em>に落ちる ― <span class="mono">clang -ffp-contract=fast</span> で建てた C 参照実装は、既定で建てた同じ clang と <strong>10 万本中 12 本</strong>で食い違い、<strong>そのうち 8 組から秘密鍵が出る</strong> ― しかも復元した鍵で新しいメッセージに署名すると、被害者の公開鍵が 8 件とも受理する（万能偽造、約 1.3×10⁴ メッセージ）。普通のビルドの選択 9 通り（2 コンパイラ、native 対 emulated、参照実装自身の手書き AVX2 経路）は全部バイト一致するので、危険なのはビルドのばらつき一般ではなく<strong>旗ひとつ</strong>である。しかもスカラー経路ではなくベクトル経路を縮約すると、さらに<strong>第 3 の</strong>互いに矛盾する列が出る。</p>
+</div>
+
+<span class="secnum">01 — 問い</span>
+<h2>仕様書は署名を決めているか？</h2>
+<p>FALCON は出力を浮動小数点演算で計算する。ガウスサンプラは <code class="inl">Complex{Float64}</code> 上で高速フーリエ最近点再帰を回し、サンプルされる整数 ― そして署名 ― は、その再帰が生む浮動小数点値そのものの関数である。ML-DSA（FIPS 204）と SLH-DSA（FIPS 205）は整数・ハッシュベースで、同じ鍵・メッセージ・乱数を与えれば、どの適合実装でも構成上同じバイト列を返す。FALCON にその保証はなく、仕様書もそれを意図していない ― §2.5.2 は浮動小数点精度をサンプル<em>分布</em>についての Rényi 発散論法で解析し、§4.1 は C の <code class="inl">double</code> が IEEE-754 に「少なくとも一致」すればよいとする。どちらも分布の話であって、二実装がビット単位で一致するかの話ではない。</p>
+<p>この区別が今や効いてくる。FIPS 206 の状況報告（Perlner, NIST, 2025年9月）は、標準が浮動小数点の演算順序を規定し、FMA を禁じ、実装が KAT にビット一致することを求める方向を示す。<strong>標準がビット一致を求めるなら、「仕様書は中間値を決めているか」は規範上の問いになる。</strong>本稿は第二の実装を作り、参照実装とどこで食い違うかを正確に測ることでこれに答える。</p>
+
+<h3>なぜ Julia か ― 正直に</h3>
+<p>我々が Julia を選んだのは、速いと期待したからだ。ネイティブ配列と数値計算の評判から、行列が重い部分（FFT・NTT・グラム行列）は書きやすく走りやすいだろうと踏んだ。それは部分的にしか当たらなかった（§6）。もう一つ、本物だが後から気づいた理由があり、そう明記する。FALCON のセキュリティ関連の時間変動には二つの源がある ― <em>アルゴリズム由来</em>（棄却サンプラのデータ依存ループ）と<em>実装由来</em>（GC・JIT・境界検査・動的ディスパッチ）。ガベージコレクト・JIT の言語は後者を閉じることが原理的にできない ― だからこそ、実装由来の変動に隠されずに仕様レベルの変動を観察する、きれいな計測器になる。自分の処理系由来の変動を隠せない言語こそ、仕様書由来の変動が素で現れる言語である。この理由で選んだのではないが、結果としてこの問いに適していた。</p>
+
+<span class="secnum">02 — 未決定性</span>
+<h2>仕様書が開けたままの 3 箇所</h2>
+<p>実装を参照実装と段階ごとに生の 64 ビットパターンで突き合わせると、浮動小数点経路は 3 群に分かれる ― 無改修で一致する原始関数（FFT 一族と <span class="mono">B0</span> 行列全体、5120/5120 double）、参照実装の書き方にして初めて一致する 3 つの計算、そして別規約で格納された 1 つの定数。3 つの書き方は代数的に同値で丸めが違う。最初の 2 つについて、両実装パターンを走るコードで示す。</p>
+
+<h3>(a) 複素除算</h3>
+<p>仕様書に式はない。読者は言語の複素除算を使う ― Julia も Python も Smith のアルゴリズムだ。参照実装は逆数を明示的に作る。Smith が数値的に優れ、参照実装のものが KAT を規定する。</p>
+<div class="code-pair">
+<pre class="pat-s"><span class="lbl">パターン S ― 仕様の読者（Julia の /）</span><span class="cm"># Smith のアルゴリズム、数値的に良い</span>
+ComplexF64[ f[i] / g[i]
+            for i in eachindex(f) ]</pre>
+<pre class="pat-c"><span class="lbl">パターン C ― 参照実装（FPC_DIV）</span>br = real(b); bi = imag(b)
+m  = 1.0 / (br*br + bi*bi)
+br *= m; bi *= -m
+ComplexF64(ar*br - ai*bi,
+           ar*bi + ai*br)</pre>
+</div>
+
+<h3>(b) LDL* の <span class="mono">D11</span></h3>
+<p>Algorithm 8 と Python 参照実装は <span class="mono">D11</span> を乗算 3 回で計算し、C 参照実装は商を逆向きに保って畳み込み、乗算 1 回で済ませる。<span class="mono">G00</span> がエルミート＝実数なので等しい。</p>
+<div class="code-pair">
+<pre class="pat-s"><span class="lbl">パターン S ― Algorithm 8 / Python</span><span class="cm"># 乗算 3 回</span>
+L10 = div_fft(G[2,1], G[1,1])
+D11 = sub_fft(G[2,2],
+        mul_fft(mul_fft(L10,
+          adj_fft(L10)), G[1,1]))</pre>
+<pre class="pat-c"><span class="lbl">パターン C ― Zf(poly_LDL_fft)</span><span class="cm"># 乗算 1 回</span>
+G01 = adj_fft(G[2,1])
+mu  = div_fft(G01, G[1,1])
+L10 = adj_fft(mu)
+D11 = sub_fft(G[2,2],
+        mul_fft(mu, G[2,1]))</pre>
+</div>
+<p>3 つ目の書き方 <strong>(c)</strong> は、参照実装が <span class="mono">ffSampling</span> の最下 2 段を手展開し、split/merge の捻り係数を <span class="mono">1/√2</span>・<span class="mono">1/√8</span> に畳んだものだ。3 つは <code class="inl">with_spec_spelling(f; cdiv, ldl, ffsampling)</code> で独立に切り替わり、既定は参照実装の書き方 ― この独立性こそが要で、発散を一つの式に帰属できる。あと 2 クラスは定数だ ― <strong>(II)</strong> <span class="mono">fpr_inv_sigma</span> は印字された σ の正しく丸めた逆数ではなく（§5）、<strong>(III)</strong> σ_min は本文が印字しない ε を使う。</p>
+
+<span class="secnum">03 — 伝播</span>
+<h2>どの選択が署名に届くか</h2>
+<p>100 個の鍵それぞれを、鍵・メッセージ・PRNG 状態を揃えたまま二つの書き方で何度も署名し、署名が食い違う回数を数える。測定前に、各腕が木の 9728 個の double のうち何個を動かすかを印字する ― どのゼロも「何もしていない腕」ではないことを示すためだ。</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>腕</th><th>摂動する</th><th>量</th><th class="num">事象</th><th class="num">率</th></tr></thead>
+<tbody>
+<tr class="hl"><td>A2 ― 複素除算 + D11</td><td>クラス I (a,b)</td><td>中心</td><td class="num">3 / 40万</td><td class="num">7.5×10⁻⁶</td></tr>
+<tr class="hl"><td>A2 · n=1024</td><td>クラス I (a,b)</td><td>中心</td><td class="num">1 / 35万</td><td class="num">2.9×10⁻⁶</td></tr>
+<tr><td>A1 ― 手展開の最下段</td><td>クラス I (c)</td><td>中心</td><td class="num">10 / 52.5万</td><td class="num">1.9×10⁻⁵</td></tr>
+<tr><td>A2a ― 複素除算のみ</td><td>クラス I (a)</td><td>中心</td><td class="num">0 / 10万</td><td class="num">&lt;3.7×10⁻⁵</td></tr>
+<tr><td>A2b ― D11 のみ</td><td>クラス I (b)</td><td>中心</td><td class="num">0 / 10万</td><td class="num">&lt;3.7×10⁻⁵</td></tr>
+<tr><td>B ― fpr_inv_sigma</td><td>クラス II</td><td><strong>幅</strong></td><td class="num">0 / 10万</td><td class="num">0</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>A1 は陽性対照</strong> ― ePrint 2024/1709 §6.1 の <span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> の差そのもので、率（52.5 万本で 1.9×10⁻⁵）は同論文 Table 2 に載る。<strong>B は陰性対照</strong>で、そのゼロは<em>理論から予期される</em> ― 幅を摂動し、同論文 Lemma 2 がそれを ≈10⁻¹¹ と抑える。分解能より遥か下なので、ゼロは何も語らない。<strong>A2 が、同論文にない腕であり、ゼロでない</strong> ― そして <strong>n=1024 でも再現する</strong>（35 万本で 1 件、やはり最後の 2 回、floor が 427/426 をまたぎ、幅はビット一致）。A2 と A1 は点推定で 2.5 倍違うが有意でなく（p ≈ 0.23）、ともに 10⁻⁵ の桁 ― 機構を共有することと整合するので、順序ではなく同程度と報告する。</p>
+
+<figure>
+<svg class="dgm" viewBox="0 0 760 300" role="img" aria-labelledby="ftitle fdesc">
+  <title id="ftitle">サンプラが敏感になる位置と、書き方が出力を反転させる仕組み</title>
+  <desc id="fdesc">ffSampling 走査の 2n=1024 回の呼び出し。最初の 2 回と最後の 2 回が敏感位置として印され、下部に整数近傍の中心が floor でまたがれる様子を示す数直線がある。</desc>
+  <text class="t-mut" x="28" y="34" font-size="11" letter-spacing="1">2n = 1024 回のサンプラ呼び出し · ffSampling 走査</text>
+  <line class="ln" x1="28" y1="70" x2="732" y2="70" stroke-width="2"/>
+  <g class="ln" stroke-width="1.5">
+    <line x1="120" y1="64" x2="120" y2="76"/><line x1="220" y1="64" x2="220" y2="76"/>
+    <line x1="320" y1="64" x2="320" y2="76"/><line x1="420" y1="64" x2="420" y2="76"/>
+    <line x1="520" y1="64" x2="520" y2="76"/><line x1="620" y1="64" x2="620" y2="76"/>
+  </g>
+  <g>
+    <circle class="c-sig" cx="40" cy="70" r="7"/><circle class="c-sig" cx="66" cy="70" r="7"/>
+    <circle class="c-sig" cx="694" cy="70" r="7"/><circle class="c-sig" cx="720" cy="70" r="7"/>
+  </g>
+  <text class="t-sig jp" x="30" y="102" font-size="11">呼び出し 1, 2</text>
+  <text class="t-sig jp" x="628" y="102" font-size="11">呼び出し 2n−1, 2n</text>
+  <text class="t-mut jp" x="270" y="102" font-size="11">内部：1.02×10⁸ 回中 0</text>
+  <text class="t-ink" x="30" y="130" font-size="12">P(整数中心) = 1/q ≈ 8×10⁻⁵</text>
+  <text class="t-ink" x="500" y="130" font-size="12">1/‖(g,−f)‖² ≈ 6×10⁻⁵</text>
+  <text class="t-sig jp" x="560" y="152" font-size="12">→ 秘密鍵の全復元</text>
+  <g transform="translate(0,196)">
+    <rect class="panel" x="28" y="0" width="704" height="86" rx="10"/>
+    <text class="t-mut" x="46" y="24" font-size="10.5" letter-spacing="1">floor のまたぎ · s = ⌊μ⌋</text>
+    <line class="ln" x1="120" y1="58" x2="640" y2="58" stroke-width="1.5"/>
+    <line class="ln-mark" x1="380" y1="44" x2="380" y2="72" stroke-width="1.5"/>
+    <text class="t-ink" x="366" y="84" font-size="11">−267</text>
+    <circle class="c-acc" cx="372" cy="58" r="5"/><circle class="c-sig" cx="389" cy="58" r="5"/>
+    <text class="t-acc" x="120" y="40" font-size="11">μ = −267.00000000000006 → s = −268</text>
+    <text class="t-sig" x="404" y="44" font-size="11">μ = −267 → s = −267</text>
+  </g>
+</svg>
+<figcaption>サンプラは整数近傍の中心でのみ敏感で、整数近傍の中心は 2n 回のうち最初の 2 回と最後の 2 回にしか現れない（ePrint 2024/1709 の Heuristic 1 ― §4 で直接確認）。μ の 6×10⁻¹⁴ のずれが二つの書き方を整数の反対側に落とし、<span class="mono">floor</span> がそれをサンプル値の 1 の差に変え、バイト列が同期を失う。A2 の 3 件はすべてこの形だ。</figcaption>
+</figure>
+
+<p>A2 の 3 件はすべて機構を正確になぞる ― 3 件とも呼び出し 2n−1 か 2n、3 件とも整数をまたぎ、3 件とも該当節点の幅が<em>ビット一致</em>。つまり発散は中心だけで起きている：</p>
+<pre><span class="cm"># scripts/first_divergence.jl</span>
+key 70 sig  534   call 1023/1024   mu -267.00000000000006  vs -267
+key 65 sig 1239   call 1023/1024   mu  337                 vs  336.99999999999994
+key 68 sig 1885   call 1024/1024   mu  285.99999999999989  vs  286</pre>
+
+<h3>その1ペアから、鍵</h3>
+<p>「鍵回復の位置」は帰結の主張だ ― 引用でなく実行して片づける。A2 ペア（key 70, sig 534、同じ syndrome で最後の2回のサンプラ出力だけ違う2署名）の差は <span class="mono">Δs0 = Δz0·g</span>, <span class="mono">Δs1 = −Δz0·f</span>、<span class="mono">Δz0 = a + b·x^{n/2}</span>。<span class="mono">(a+bx^{n/2})⁻¹ = (a−bx^{n/2})/(a²+b²)</span> なので、復元は <span class="mono">(a,b) ∈ {−19..19}²</span> の探索で済み、環の逆元計算は要らない。<span class="mono">(s, s')</span> と公開鍵<strong>だけ</strong>から：</p>
+<pre><span class="cm"># scripts/key_recovery.jl 70 534</span>
+hit at (a, b) = (-1, 0)
+candidate reproduces the public key h (mod q): yes
+|g_cand| max = 14, |f_cand| max = 13   (true |g| = 14, |f| = 13)
+matches the stored secret up to negation: (f,g) = -(f_true, g_true)
+<span style="color:var(--signal);font-weight:600;">*** 単一の A2 発散ペアから、秘密鍵を完全復元。***</span></pre>
+<p>復元された <span class="mono">(f, g)</span> は符号対称 <span class="mono">(f,g) ↦ (−f,−g)</span> を除いて格納鍵と一致 ― 同じ署名鍵だ。つまり複素除算と <span class="mono">D11</span> は、署名を変えるだけでなく、syndrome を2回署名する derandomized の設定で<strong>鍵を露出させる</strong>のに十分。復元の代数は回帰テスト済み（<span class="mono">test_falcon.jl</span>）。</p>
+
+<h3>なぜ最後の2回が支配的か ― 論文が残した未解決を解いた</h3>
+<p>2024/1709 §6.1 は「整数中心を条件づけると最後の2回が最初の2回より発散しやすいが、<em>理由は完全には分からない</em>」と書いた（sign_dyn/sign_tree の差、FMA では起きない）。綴りが中心に与える摂動 <span class="mono">|Δμ|</span> を全位置で測ると、<strong>木の降下に沿って累積し</strong>、中点で段になる：</p>
+<pre><span class="cm"># scripts/position_profile.jl（位置ブロックごとの平均 |Δμ|）</span>
+pos    0.. 511  (z1, 第1降下) : 2.7e-15 → 1.0e-14
+pos  512..1023  (z0, 第2降下) : 7.4e-14 → 8.7e-14   <span class="cm"># ~7倍の段</span>
+最初の2回 (0,1)     : 2.7e-15
+最後の2回 (1022,1023): 8.6e-14        <span style="color:var(--signal);font-weight:600;">比 ≈ 32×</span></pre>
+<p>段は構造的だ：<span class="mono">ffSampling</span> は <span class="mono">z1</span> を先に引き、<span class="mono">t0 ← t0 + (t1 − z1)·l10</span> を作ってから <span class="mono">z0</span> を引く。<span class="mono">z0</span>（後半＝最後の2回を含む）の中心は上位 <span class="mono">l10</span> 補正を経由し、丸め差がそこに乗る。前半の中心は経由しない。中心が整数をまたぐのは <span class="mono">|Δμ|</span> が整数までの距離を超えるときなので、32倍大きい <span class="mono">|Δμ|</span> は 32倍多い発散 ― これが非対称性の正体。そして A2（木のみ）では最初の2回の <span class="mono">|Δμ|</span> は<strong>厳密に 0</strong>（第1葉の中心は l10 補正前の純粋な目標 split）なので、A2 の発散は<em>構造的に</em>最後の2回に限られる。敏感位置は固定ではなく、摂動がどこから入るかで決まる。</p>
+
+<span class="secnum">04 — もう一つのチャネル</span>
+<h2>誰もが脇に置いた 2 回</h2>
+
+<p>ePrint 2024/1709 §5 は、<em>最初の</em> 2 回での発散を 1 段落で退ける ― 生じる差ベクトルは「短い格子ベクトルではあるが、鍵復元を可能にするほど短いとは期待できない」。これは<strong>差ベクトルについての</strong>主張である。あの位置には、差ベクトルを一切読まないチャネルがある。</p>
+
+<p><span class="mono">sample_preimage</span> の第 2 成分は <span class="mono">t1 = (−ĉ·b)/q</span>、<span class="mono">b = −f</span> なので、環の元として <span class="mono">t1 = (c·f)/q</span> が<em>厳密に</em>成り立つ（<span class="mono">c</span> は公開のハッシュ点）。<span class="mono">Int128</span> の厳密な negacyclic 演算と突き合わせると、最初の 2 回の中心はその商の係数に、固定インデックスで、浮動小数点誤差の範囲で一致する。つまり call 1 での整数中心とは、ちょうど</p>
+
+<pre>(c·f)[n/2−1] ≡ 0  (mod q)</pre>
+
+<p>― 秘密についての <span class="mono">F_q</span> 線形方程式 1 本であり、その係数は攻撃者が公開メッセージから計算できる。漏れているのは値ではなく<em>事象の発生</em>そのものである。解いてみた:</p>
+
+<pre><span class="cm"># scripts/event_solve.jl</span>
+collected 511 events from 5823368 syndromes (rate 8.77e-05, predicted 1/q = 8.14e-05)
+system rank 511 of 512 unknowns
+recovered vector: max |.| = 16   (true f has max |.| = 16)
+<span style="color:var(--good);font-weight:600;">matches the secret f: true  (up to sign)</span></pre>
+
+<p><span class="mono">n−1</span> 件の事象で階数 511 の系ができ、核は 1 次元。核ベクトルの <span class="mono">q−1</span> 通りのスカラー倍を走査して最短を取ると <span class="mono">f</span> そのものが出る。512×512 のガウス消去 1 回、49 秒 ― 格子簡約も差ベクトルもなし。ここで二つの前提が崩れた: <span class="mono">Δs</span> の短さが問題だという前提と、<span class="mono">f mod q</span> から <span class="mono">f</span> への持ち上げに格子が要るという前提である。</p>
+
+<div class="note">
+<span class="eyebrow">which-call ラベル無しでも解ける</span>
+<p>オラクルは first-two 発散を教えるが、call 1 / call 2 のどちらが跨いだかは言わない（one-of-two 論理和）。公開統計では区別できず（2 署名の分類器は精度 0.50〜0.60 の偶然）、素朴な反復も収束しない。だが 2 つの候補行は <span class="mono">b = x^{n/2} a</span> の関係にあり、論理和は <span class="mono">(a·f)(a·f′) = 0</span>（<span class="mono">f′ = −x^{n/2}f</span>）― すなわち <strong>rank-2 対称行列 <span class="mono">S = sym(f f′ᵀ)</span> への線形測定</strong>になる。約 <span class="mono">n(n+1)/2</span> 事象で <span class="mono">S</span> が決まり、その列空間が厳密に <span class="mono">span{f, f′}</span>、そこから <span class="mono">f</span> を短ベクトルとして取り出す。<span class="mono">blind_solve.jl</span> はラベル無しで <span class="mono">f</span> を復元する（n = 16, 32 で 8/8）。盲目チャネルは不可能ではなく、ラベル既知の <span class="mono">O(n)</span> に対し <span class="mono">O(n²)</span> 事象（n 倍）で済む。1 ビットの不一致検出オラクルだけで鍵が出る。</p>
+</div>
+
+<h3>必要なオラクルは「窓」であり、両端とも測れる</h3>
+
+<p>このチャネルには「どのメッセージが事象だったか」を教える何かが要る。二実装の差がそれになるのは、中心への摂動が<strong>小さすぎず大きすぎない</strong>ときだけである。</p>
+
+<p><strong>小さすぎる</strong>側の境界が面白い。誰の精度の話でもないからだ。事象では真の中心は厳密な整数 <span class="mono">m</span> だが、<em>両方の</em>実装が同じ累積誤差で <span class="mono">m + η</span> を計算する ― FFT も木も降下も両者に共通だからである。<span class="mono">floor</span> が食い違うのは、差が <span class="mono">η</span> の符号をひっくり返したときだけ。200 件の事象で <span class="mono">|η|</span> の中央値は 2.8×10⁻¹⁴、そして注入した摂動 <span class="mono">δ</span> に対する跨ぎ確率は、ちょうどそこで立ち上がる:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>δ</th><th class="num">0</th><th class="num">10⁻¹⁶</th><th class="num">10⁻¹⁵</th><th class="num">10⁻¹⁴</th><th class="num">10⁻¹³</th><th class="num">10⁻¹²</th><th class="num">10⁻¹¹</th><th class="num">10⁻⁸</th></tr></thead>
+<tbody><tr><td>P(跨ぐ | 整数中心)</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.000</td><td class="num">0.030</td><td class="num">0.290</td><td class="num">0.425</td><td class="num">0.435</td><td class="num">0.440</td></tr></tbody>
+</table>
+</div>
+
+<p><strong>大きすぎる</strong>側は内部の偽陽性率である。同じ摂動は約 2n 個の一般の中心を <span class="mono">κδ</span>（<span class="mono">κ = 1.62×10³</span>）の率で跨ぎ、解法が許す偽の割合は約 <span class="mono">1/n</span>。両者から窓は <strong>2.8×10⁻¹⁴ 〜 4.9×10⁻¹¹</strong>、幅 3.2 桁。</p>
+
+<div class="note">
+<span class="eyebrow">本稿自身の発見はどこにあるか</span>
+<p>窓の下である。§02 の書き方の差は最初の 2 回の中心を 2.7×10⁻¹⁵（腕 A1）と<em>厳密に 0</em>（腕 A2）しか動かさない。整数中心を 10 件作って 1 件も跨がなかった以前の実験は、運が悪かったのではない。いま名前のついた閾値の、一桁下にいた。</p>
+</div>
+
+<span class="secnum">05 — 参照実装 対 参照実装</span>
+<h2>最適化オプション一つと、秘密鍵</h2>
+
+<p>C99 6.5p8 は、コンパイラが <span class="mono">a*b + c</span> を丸め 1 回の融合積和に縮約することを許し、<span class="mono">FP_CONTRACT</span> がそれを制御する。FALCON 参照実装はプラグマも旗も設定せず、仕様書は縮約に言及しない。そこで模型をやめ、参照実装そのものを 3 通りに建てた ― 同じソース、同じ鍵、同じメッセージ、同じ PRNG テープ。</p>
+
+<pre>cl_fast: 143 fma instructions   [clang -O2 -march=native -ffp-contract=fast]
+cl_def:    0                    [clang -O2 -march=native]
+gc_def:    0                    [gcc   -O2 -march=native]
+
+gcc default == clang default : identical over 100000 signatures
+<span style="color:var(--signal);font-weight:600;">clang -ffp-contract=fast vs clang default : 12 of 100000 differ  (1.2e-4)</span></pre>
+
+<p>3 つとも同一シードから同一の秘密鍵を作る ― 鍵生成も FFT を回すので、仮定せず確認した。食い違った 12 組を 2024/1709 §5.1 の復元にかける（見えるのは 2 つの署名・公開鍵・メッセージだけ）:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>メッセージ</th><th class="num">差の係数数</th><th>結果</th></tr></thead>
+<tbody>
+<tr><td class="mono">8861</td><td class="num">916 / 1024</td><td><span class="win">鍵復元</span> · <span class="mono">x²⁵⁶(f,g)</span></td></tr>
+<tr><td class="mono">23215</td><td class="num">966 / 1024</td><td><span class="win">鍵復元</span> · <span class="mono">−x⁰(f,g)</span></td></tr>
+<tr><td class="mono">23823</td><td class="num">916 / 1024</td><td><span class="win">鍵復元</span> · <span class="mono">−x²⁵⁶(f,g)</span></td></tr>
+<tr><td class="mono">69227, 69647, 78710, 85161, 87268</td><td class="num">916 / 1024</td><td><span class="win">鍵復元</span> · さらに 5 件</td></tr>
+<tr><td class="mono">7655, 15028, 38958, 66120</td><td class="num">1020–1023 / 1024</td><td><span class="mono">(a,b)</span> なし ― <em>最初の 2 回</em>での発散（§04）</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>12 件中 8 件 ― そして 8 件とも偽造できた。</strong>復元された鍵はいずれも保存鍵の厳密な NTRU 対称 <span class="mono">±x^k(f,g)</span> で、<span class="mono">‖(g,−f)‖² = 16676 ≤ 1.17²q = 16822</span>。だが公開鍵関係は「<span class="mono">h</span> に対する NTRU 対のひとつ」を、ノルム条件は「十分短い」を言うだけで、<em>サンプラが回る</em>とは言っていない。そこで、使って確かめた: 復元した各 <span class="mono">(f,g)</span> について <span class="mono">fG − gF = q</span> を解いて基底を完成させ（鍵生成が回すのと同じ降下で、攻撃者が持っていないものは要らない）、被害者が署名していないメッセージに署名し、被害者の公開鍵に出す。<strong>8 件中 8 件が受理される。</strong>署名 2 本からの<strong>万能偽造</strong>である。率が費用を決める: 鍵を渡す発散は 10 万本中 8 本なので、両ビルドの署名を同じメッセージで取れる攻撃者に必要なのは<strong>約 1.3×10⁴ メッセージ</strong>、そのあとは 40×40 の探索だけ。残る 4 件は §04 のチャネルそのもの: <span class="mono">Δz</span> が 2-疎でないことを厳密除算の失敗が証明し、内部の整数中心は 1.02×10⁸ 回引いて 0 件だった。差の係数数がきれいに分かれるので、攻撃者は 2 つのチャネルを区別できる。4/12 という比は、まったく別の摂動源であるにもかかわらず同論文 Table 2 の 30/70 に近い。FALCON-1024 でも再現する ― 6 万本中 6 本。<strong>x86 の特殊事情でもない</strong>: クロスツールチェインと <span class="mono">qemu-user</span> で aarch64 でも再実行した。実 <span class="mono">fft.c</span> は同じフラグでだけ縮約し（gcc は決してせず、clang は <span class="mono">-ffp-contract=fast</span>/<span class="mono">-Ofast</span>/<span class="mono">-ffast-math</span> のみ）、FMA が基本 ISA でも <span class="mono">fpr</span> ラッパが止めるので既定は縮約しない。エミュレーション下で <strong>15 万本中 19 本（1.27×10⁻⁴）</strong>発散、最初の 12 メッセージは x86 と同一、ペアから鍵と偽造が出る。危険はアーキ非依存である。</p>
+
+<p><strong>スイッチは参照実装自身が用意し、過小評価している。</strong> AVX2 経路には <span class="mono">FALCON_FMA</span> という明示オプションがあり、真の <span class="mono">_mm256_fmadd_pd</span> を出す。<span class="mono">config.h</span> はその危険を「署名が変わるのは < 2⁻⁴⁰、safe and interoperable」と自己評価する。AVX2+FMA 機で有無 2 通りに建て同一鍵で 274,944 本署名すると <strong>30 本＝ 2⁻¹³·²</strong> で食い違い、参照の見積りより約 2²⁷ 高く、発散ペアから鍵と偽造が出る。「safe and interoperable」は署名 1 本では真、両ビルドの 2 本を並べると偽 ― 差が鍵だから。本稿の主張が参照実装の設定ファイルに書かれ、握りつぶされている。</p>
+
+<div class="note">
+<span class="eyebrow">今、実際に危険なのか</span>
+<p>いいえ ― だからこそ今動くべきである。出荷エコシステムを調べた限り、FMA 可能ターゲットで縮約する Falcon ビルドは<em>存在しない</em>: liboqs・PQClean は整数エミュか手書きの 2 回丸め AVX2 intrinsics、Bouncy Castle は Java、OpenSSL 3.5・AWS-LC・Botan・CIRCL・Go は Falcon 自体を出荷していない。脅威は<strong>潜在的</strong>で、参照の FPEMU 既定・intrinsics・<span class="mono">fpr</span> ラッパ・警告だけが防いでいる ― どれも仕様書にはない。FIPS 206 が native-FP・bit 一致へ動くことこそ潜在を顕在に変える圧力なので、その前に規範で禁じるべきである。</p>
+</div>
+
+<h3>陰性対照が価値の半分である</h3>
+
+<p>「参照実装のビルドどうしが食い違う」という結果は、普通のビルドの選択でも食い違うのなら、警告としては強くても<em>使えない</em> ― どの差が効いたか言えないからだ。食い違わない。各 3 万署名で:</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>ビルド構成</th><th>署名列</th></tr></thead>
+<tbody>
+<tr><td><span class="mono">gcc -O2</span> · native double</td><td rowspan="9" style="vertical-align:middle;"><span class="win">9 通りすべてバイト一致</span></td></tr>
+<tr><td><span class="mono">gcc -O2 -march=native</span></td></tr>
+<tr><td><span class="mono">gcc</span> · 参照実装の AVX2 版 FFT</td></tr>
+<tr><td><span class="mono">gcc -O2</span> · emulated FP</td></tr>
+<tr><td><span class="mono">gcc -march=native</span> · emulated</td></tr>
+<tr><td><span class="mono">clang -O2</span> · native double</td></tr>
+<tr><td><span class="mono">clang</span> · AVX2 経路</td></tr>
+<tr><td><span class="mono">clang -O2</span> · emulated FP</td></tr>
+<tr><td><span class="mono">gcc</span> AVX2 経路 + <span class="mono">-ffp-contract=fast</span></td></tr>
+<tr><td><span class="mono">clang -O2 -march=native -ffp-contract=fast</span> · スカラー</td><td><span class="lose">第 2 の列</span></td></tr>
+<tr><td><span class="mono">clang</span> AVX2 経路 + <span class="mono">-ffp-contract=fast</span></td><td><span class="lose">第 3 の列</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>2 コンパイラ、native 対 emulated、baseline 対 <span class="mono">-march=native</span>、そして参照実装が別に持つ手書きベクトル版 AVX2 FFT ― 全部ビット一致する。（AVX2 ビルドが本当にベクトル経路を含むことも確認した: <span class="mono">ymm</span> 命令が gcc で 599、clang で 4321。）emulated と native が一致することは単独で意味がある: 参照実装の <span class="mono">config.h</span> は「native FPU は determinism に影響しうる差を生む」から emulation を薦めているが、ここでは生まない。発散はすべて旗ひとつに帰属する ― <span class="mono">-Ofast</span> と <span class="mono">-ffast-math</span> のどちらもその旗を含む。</p>
+
+<p>さらに 2 点。GCC は AVX2 の intrinsics も縮約しない ― <span class="mono">-ffp-contract=fast</span> を明示しても fma 命令は 0 ― ので、ベクトル経路の既定ビルドと縮約ビルドは同じプログラムである。clang は縮約し、結果は<strong>第 3 の列</strong>になる。既定とも、clang のスカラー縮約ビルドとも違う: 3 万署名で、2 つの縮約ビルドはそれぞれ既定と 5 本ずつ食い違い、4 本は共通、1 本ずつが固有である。これは「参照実装と壊れたビルド」ではない。<strong>互いに矛盾する適合ビルドが 3 つ</strong>あり、<em>どの</em>メッセージが漏れるかは、コンパイラがたまたまどの経路を縮約したかで決まる。</p>
+
+<div class="note">
+<span class="eyebrow">いま FN-DSA とこれの間に立っているもの</span>
+<p>偶然である。native ビルドは <span class="mono">double</span> を <span class="mono">typedef struct { double v; } fpr;</span> で包み、<span class="mono">fpr.h</span> はその理由を書いている ― 生の演算子を使ったらコンパイラに叱ってほしいから。誰も書き残していない第二の効果がある。GCC は我々が試したどの設定でもこのラッパ越しに縮約せず、clang も <span class="mono">-ffp-contract=fast</span> のときだけ縮約する。型安全のためのイディオムが、ヘッダの中で、別のことを書いた注釈の下で、暗号的な仕事をしている。我々は一つ前の版で「GCC と clang の<em>既定</em>が食い違う」と書いた。建てて測ったらそれは誤りで、訂正後の主張 ― 2 つのコンパイラではなく旗ひとつ ― は、より狭く、より鋭い。</p>
+</div>
+
+<span class="secnum">06 — 位置づけ</span>
+<h2>何が新しく、何が新しくないか</h2>
+<p>正直な位置づけが、貢献のほとんどだ。演算の機構、参照実装の 2 モードが発散すること、幅への非感受性 ― すべて ePrint 2024/1709 の結果である。我々はそれらを独立に追認し、その上に積む。</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th></th><th>ePrint 2024/1709</th><th>本稿</th></tr></thead>
+<tbody>
+<tr><td>摂動源</td><td>FMA；参照実装の 2 signing mode</td><td><strong>仕様書 対 参照実装</strong></td></tr>
+<tr><td>機構</td><td>Lemma 1（中心）/ Lemma 2（幅）</td><td>同じ ― 独立に追認</td></tr>
+<tr><td>手展開の差 (I c)</td><td>§6.1 で特定、§7.2 で対策</td><td>陽性対照として再現 (A1)</td></tr>
+<tr class="hl"><td>複素除算・D11 (I a,b)</td><td><strong>存在しない</strong></td><td><strong>7.5×10⁻⁶ で鍵回復位置。§7.2 で塞がらない</strong></td></tr>
+<tr><td>Heuristic 1</td><td>帰結を測定</td><td>原因を直接測定</td></tr>
+<tr><td>偶数 ‖(g,−f)‖²</td><td>C の癖として指摘</td><td>独立に追認</td></tr>
+<tr class="hl"><td>最初の 2 回</td><td>脇に置く ―「鍵復元を可能にするほど短くない」</td><td><strong>事象だけで <span class="mono">F_q</span> 上から鍵復元</strong>（§04）</td></tr>
+<tr class="hl"><td>摂動源としての FMA</td><td>ありうるとして提起（§6.2）</td><td><strong>参照実装、2 通りの適合ビルド：10万中12本、鍵8本</strong>（§05）</td></tr>
+<tr><td>オラクルの要件</td><td>―</td><td>両側の窓、両端とも実測</td></tr>
+</tbody>
+</table>
+</div>
+<p>唯一の新しい実験事実は A2 だ。その意義は新しい機構ではない ― Lemma 1 だ ― が、<em>源</em>が違う。同論文の 2 源はどちらも参照実装の内側にある：FMA はビルドフラグ、<span class="mono">sign_dyn</span>/<span class="mono">sign_tree</span> は §7.2 の対策が互いに揃える 2 つの入口だ。複素除算と <span class="mono">D11</span> は<strong>仕様書</strong>と参照実装の差なので、両 signing mode に存在し、その対策を生き延びる。ビット一致 KAT を意図する標準にとって、これは「二実装を一致させるべき」と「本文がどちらの式かを言わねばならない」の差である。</p>
+
+<div class="note">
+<span class="eyebrow">先に、三度、間違えた</span>
+初期の枠組みは「仕様書の未決定性だけで足りる、違うビルドは要らない」と主張した ― §6.1 の再発見だった。読み込んでいなかった 1 個のフラグが、クラス I(c) しか動かしていなかったからだ。さらに古い主張「この差は署名に届かない」は 480 署名に依っていて、それでは 10⁻⁵ とゼロを区別できない。論文を読み、3 つの書き方を分離し、大標本で測ったことが、正しく狭い主張を生んだ。
+</div>
+
+<h3>Heuristic 1 を直接測る</h3>
+<p>ePrint 2024/1709 は Heuristic 1 の<em>帰結</em>（Table 2, 4）を測り、それが定理にできないと述べる（Remark 1）。我々は<em>原因</em> ― 各呼び出しの中心が整数の 10⁻⁹ 以内に入る頻度 ― を、彼らから導いたのでなく仕様書から書いた実装で測る。</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>位置</th><th class="num">実測</th><th class="num">Heuristic 1</th></tr></thead>
+<tbody>
+<tr><td>呼び出し 1, 2</td><td class="num">8.5×10⁻⁵</td><td class="num">8.14×10⁻⁵</td></tr>
+<tr><td>呼び出し 2n−1, 2n</td><td class="num">7.0×10⁻⁵</td><td class="num">6.08×10⁻⁵</td></tr>
+<tr><td>呼び出し 3 … 2n−2</td><td class="num">0 / 1.02×10⁸</td><td class="num">≈ 0</td></tr>
+</tbody>
+</table>
+</div>
+<p>両端は Poisson 誤差の内側で一致し、内部は 1.02×10⁸ 回にわたり空だ。100 鍵すべてが<strong>偶数</strong>の ‖(g,−f)‖² を持ち、同論文 §7.1 が指摘する C 参照実装の癖を ― それが効くと知らずに C の鍵生成を追った実装から ― 追認する。</p>
+
+<h3>他の方式は影響を受けるか ― 参照実装を読んで確かめた</h3>
+<p>2024/1709 は Mitaka/Antrag を「中心が連続だから安全」とする。これを検証し、HAWK まで拡張した ― 移植でなく参照実装（<span class="mono">Mitaka-EC22</span>, <span class="mono">antrag</span>, KAT 検証済み <span class="mono">lil-hawk-py</span>）を直読して。移植バグを発見と取り違えないためだ。</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>方式</th><th>サンプラの中心</th><th>署名にFP</th><th>感受性</th></tr></thead>
+<tbody>
+<tr class="hl"><td>Falcon</td><td>有理・小分母（4位置で q や ‖(g,−f)‖²）</td><td>有</td><td class="lose">有</td></tr>
+<tr><td>Mitaka</td><td>連続（Box–Muller 摂動）</td><td>有</td><td class="win">無</td></tr>
+<tr><td>Antrag</td><td>連続（Mitaka 上に構築）</td><td>有</td><td class="win">無</td></tr>
+<tr><td>HAWK</td><td>{0, ½} パリティビット・固定CDT</td><td><strong>無</strong></td><td class="win">無</td></tr>
+</tbody>
+</table>
+</div>
+<p>footnote 6 は構成上正しい（Mitaka の <span class="mono">normaldist</span> が中心を連続化、HAWK の署名は全整数で FP FFT は<em>検証側</em>のみ）。ここから2条件則が出る：感受性には<strong>(a) 署名サンプラの浮動小数点</strong>と<strong>(b) 小分母の有理中心</strong>の両方が要る。Falcon だけが両方を満たす ― 危険は格子署名一般ではなく Falcon 固有の設計に起因し、修正は FN-DSA に属する。</p>
+
+
+<span class="secnum">07 — 破って、直す</span>
+<h2>対策の半分では何も守れない ― そして、より簡単な代替</h2>
+
+<p>ePrint 2024/1709 §7.1 の対策は2部構成：(1) <span class="mono">SamplerZ</span> を<em>四捨五入</em>版（Algorithm 4）に置換し、不安定点を整数から半整数へ移す。(2) <span class="mono">‖(g,−f)‖²</span> を<strong>奇数</strong>に制限し、半整数中心を不可能にする。実装した。5 つの (μ,σ) で各 20 万標本の χ² は χ²/df = 0.72〜1.02 ― Algorithm 4 は分布的に健全（独立確認）。</p>
+
+<div class="note">
+<span class="eyebrow">非対称性</span>
+参照実装の鍵生成は奇数ノルムを作らない（f と g の<em>両方</em>の係数和を奇数に強制 → 和は偶数）。ただし part 2 は<strong>配備可能</strong>である ― 片方の parity を緩めれば奇数ノルムが 40/40 で得られる（実測）。問題は<em>二つめ</em>の変更である点で、サンプラだけ触る実装者は最初の変更しかしない。そして中心 <span class="mono">n/g</span> が半整数になるのは <span class="mono">g</span> が<strong>偶数</strong>のときだけ。最初の2回は <span class="mono">g = q = 12289</span> ＝<strong>奇数</strong> → 完全免疫。最後の2回は <span class="mono">g = ‖(g,−f)‖²</span> ＝<strong>偶数</strong> → 全く免疫しない。しかも最初の2回は<em>無害</em>な位置、最後の2回は鍵の全復元位置。
+</div>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>位置</th><th>g</th><th class="num">整数中心</th><th class="num">半整数中心</th></tr></thead>
+<tbody>
+<tr><td>呼び出し 1, 2</td><td>q = 12289（奇）</td><td class="num">5</td><td class="num win">0</td></tr>
+<tr class="hl"><td>呼び出し 2n−1, 2n</td><td>‖(g,−f)‖²（偶）</td><td class="num">7</td><td class="num lose">11</td></tr>
+</tbody>
+</table>
+</div>
+<figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;">各端 10 万標本。<span class="mono">floor</span> では 12 件中 7 件が危険端。<span class="mono">round</span>（鍵生成を変えず）では<strong>11 件すべて</strong>が危険端。</figcaption>
+
+<p>part 1 を入れた状態で攻撃を通した。参照鍵で 16 万署名：半整数近傍中心 29 件、発散 3 件、<strong>3/3 で秘密鍵を復元</strong> ― 格子対称を除いて厳密に一致。<em>開示:</em> ここで使った摂動源は A1 腕で、それは同論文の<em>もう一つの</em>対策（§7.2）が消す源である。こちらの A2 腕は §7.2 を生き延びるが、丸めサンプラ下では稀すぎて未観測。この実験が示すのは機構であって、対策全体の突破ではない。</p>
+<pre><span class="cm"># scripts/countermeasure_break.jl</span>
+DIVERGENCE key 20 sig  562 : 909/1024 相違
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^256 (f,g)
+DIVERGENCE key 41 sig 1346 : 900/1024 相違
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-1,0)  =  x^0   (f,g)
+DIVERGENCE key 82 sig 1054 : 936/1024 相違
+   <span style="color:var(--signal);font-weight:600;">*** KEY RECOVERED ***</span> (a,b)=(-2,0)  = -x^256 (f,g)
+
+対策あり : 3/160000 = 1.9e-5
+対策なし : 10/525000 = 1.9e-5   <span class="cm"># 変わらない</span></pre>
+<p><em>完全な</em>対策は健全かつ配備可能（t 奇数なら m₂, m₃ も奇数）。規範的な要点は、2 つの部分が<strong>単独では役に立たない</strong>こと ― 丸めサンプラを採る標準は、鍵生成の parity 変更を同じ条項で義務づけ、片方だけでは不十分だと明記する必要がある。</p>
+
+<h3>置き換え：中心を厳密な有理数にスナップする</h3>
+<p>敏感位置では厳密な中心が <span class="mono">n/g</span> で、<em>分母 g は署名者が既に知っている</em>。浮動小数点の中心は ~10⁻¹³ の精度なので <span class="mono">g·μ̂</span> は整数 <span class="mono">n</span> から ~1.6×10⁻⁹ 以内 ― 破るのに必要な 0.5 に対して<strong>7 桁の余裕</strong>（実測最大残差 1.4×10⁻⁹ と 2.4×10⁻⁸、各 10 万標本）。よって <span class="mono">n = round(g·μ̂)</span> は厳密、<span class="mono">s = fld(n, g)</span> は純整数演算。</p>
+<pre><span class="cm"># scripts/snapping.jl — 本企画が見つけた全発散ペア</span>
+A2 key 70 sig  534   off: 463/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A2 key 65 sig 1239   off: 498/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A2 key 68 sig 1885   off: 457/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+A1 key  4 sig  105   off: 455/512 DIVERGE   on: 0  <span style="color:var(--good);font-weight:600;">AGREE</span>
+
+健全性: 通常署名 1200 本中 0 本しか変わらない</pre>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th></th><th>2024/1709 §7.1</th><th>rational snapping</th></tr></thead>
+<tbody>
+<tr><td>サンプラ変更</td><td>Algorithm 4 に置換</td><td>1024 回中 4 回で 3 行</td></tr>
+<tr class="hl"><td>鍵生成の変更</td><td class="lose">必須 — 見落としやすい第二の変更</td><td class="win">不要</td></tr>
+<tr><td>出力分布</td><td>新 base sampler・新たな証明義務</td><td>不変（1200 本中 0 本）</td></tr>
+<tr><td>サンプラだけ変えた場合</td><td class="lose">鍵復元が成功したまま</td><td class="win">該当なし（変更は1つ）</td></tr>
+</tbody>
+</table>
+</div>
+<p>正直な限界を4つ：10⁻⁹ の余裕は<em>実測であって証明ではない</em>。使えるのは g が既知かつ 2⁵³ 未満の位置のみ。「1200 本中 0 本」の健全性検査は<em>検出力がほぼ無い</em>（期待変化数 ≈0.3）ので分布検定は実質未実施。実装は確保を伴い定数時間でなく、r が [0,1) を外れる場合がある。<strong>有望な方向であって、完成した対策ではない。</strong></p>
+
+<span class="secnum">08 — 性能</span>
+<h2>どれくらい速いか、何に対して</h2>
+<p>1 台（4 コア、FMA 付き x86-64 ― 1 台という制約は実在し、隠さない）。変えられるものは変えた ― C は 2 コンパイラ・3 最適化レベル・エミュ対ネイティブ浮動小数点、Julia は 3 最適化レベル、そして run 間分布の中央値を報告する。</p>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th>ビルド</th><th class="num">鍵生成</th><th class="num">署名</th><th class="num">検証</th></tr></thead>
+<tbody>
+<tr class="hl"><td>本稿 · Julia −O2</td><td class="num">9.78</td><td class="num">0.89</td><td class="num win">0.015</td></tr>
+<tr><td>C ネイティブ · clang −O3 −march=native</td><td class="num">5.02</td><td class="num">0.135</td><td class="num">0.017</td></tr>
+<tr><td>C ネイティブ · gcc −O2</td><td class="num">5.91</td><td class="num">0.171</td><td class="num">0.026</td></tr>
+<tr><td>C エミュ · clang −O3（配備形）</td><td class="num">10.71</td><td class="num">1.58</td><td class="num">0.020</td></tr>
+<tr><td>C エミュ · gcc −O2</td><td class="num">12.33</td><td class="num">1.79</td><td class="num">0.024</td></tr>
+<tr><td>Python 参照実装</td><td class="num">2657</td><td class="num">18.39</td><td class="num">3.52</td></tr>
+</tbody>
+</table>
+</div>
+<figcaption style="margin-top:-0.6rem;margin-bottom:1.2rem;">FALCON-512、1 演算あたり中央値ミリ秒。緑＝測った全ビルド中で最速。</figcaption>
+<p>Julia −O2 の行から比を読む：</p>
+<ul>
+<li><strong>検証は C を含め最速</strong> ― 0.015 ms 対 最速 C ビルドの 0.0165（≈1.1 倍）、gcc −O2 の 0.026（≈1.6 倍）、そして <strong>Python の 235 倍</strong>。検証はサンプラも多倍長整数もない NTT 主体の整数演算で、Julia の配列と LLVM が最も得意とする所だ。</li>
+<li><strong>署名はエミュ C ビルドの ≈1.8 倍速く</strong>（配備される FALCON の多くが走らせる版）、<strong>Python の 20 倍</strong>、ネイティブ C の ≈6 倍遅い ― 浮動小数点サンプラが C の SSE2 double に負ける。</li>
+<li><strong>鍵生成は ≈9.78 ms ― 全エミュ C ビルドより速く</strong>、<strong>Python の 272 倍</strong>だが、ネイティブ C の ≈1.9 倍遅い。多倍長整数を <code class="inl">BigInt</code> で持つのが、参照実装の 31 ビットリム RNS に対する差だ。</li>
+</ul>
+<p>n=1024 では傾向が鋭くなる ― 検証は再び最速（0.031 ms 対 最速 C 0.035、Python の 245 倍）、署名はエミュ C の ≈1.7 倍・Python の 18.8 倍、鍵生成は Python の 296 倍だが今度はエミュ C にも ≈1.3 倍遅い（<code class="inl">BigInt</code> 対 RNS の差が次数で開く）。特筆すべきは <strong>Julia −O2 が 512 で、−O3 が 1024 で勝つ</strong>こと ― 最良のレベルは演算ごとで、1 レベルだけ報告すれば実装を誤って伝える。鍵生成は長い最適化の到達点でもある ― 最初の動作版は 9610 ms で、9.78 ms への道はほぼ全て確保の除去であり、高水準の配列書き換えではなかった。</p>
+
+<span class="secnum">09 — 範囲と限界</span>
+<h2>定数時間性、そしてまだ言えないこと</h2>
+<p>この実装は定数時間<strong>ではなく</strong>、目指してもいない。定数時間実装ならできない事をする箇所には <code class="inl">CONSTANT TIME:</code> コメントを残した。Julia 実装は実装由来のチャネル（GC・JIT・境界検査・ディスパッチ）を一切閉じられない ― だからこそここでの仕様レベルの問いにはきれいな計測器で、配備用の署名器としては不向きなのだ。していない側面攻撃の貢献を主張するのでなく、そう明記する。</p>
+<p>未解決として明示するもの：</p>
+<ul>
+<li><strong>A2a / A2b は分離できていない</strong> ― 複素除算単独と <span class="mono">D11</span> 単独はどちらも 0/10万。単独率 ≈3.75×10⁻⁶ をゼロから分けるには数百万署名が要り、そこまで到達していない。二つ合わせれば署名に届く、とは言えるが、どちらが効くかは言えない。</li>
+<li><strong>A2 と A1 の率は区別できない</strong> ― 点推定で 2.5 倍だが、92.5 万本のプールで p ≈ 0.23。順序ではなく「同程度」と報告する。</li>
+<li><strong>非対称性</strong>には機構を与えたが、較正済みの法則は与えていない ― 比の推定 3 通りが一桁にまたがり、突き合わせられていない。</li>
+<li><strong>事象チャネルは実ハッシュで通し、盲目も解いた。</strong><span class="mono">event_attack.jl</span> が一様近似を外し実 <span class="mono">hash_to_point</span> 事象 511 本で復元・偽造まで届く。盲目の which-call は §04 の rank-2 リフト（<span class="mono">blind_solve.jl</span>）が解く ― ラベル既知の <span class="mono">O(n)</span> に対し <span class="mono">O(n²)</span> 事象。未実施は n=512 での盲目の通し実行（約 3.3×10⁹ 事象）で、リフトは n≤32 で実証（O(n²) の線形解が唯一の理由）、代数は n=512 でも同一。</li>
+<li><strong>縮約の結果は 2 アーキだが全組合せではない。</strong>x86-64（gcc 13.3 / clang 18.1）と aarch64（gcc 13.2 / clang 18.1、<span class="mono">qemu-user</span>）で同一結果 ― gcc は縮約せず、clang は <span class="mono">-ffp-contract=fast</span> 系のみ、率も鍵復元も一致。FMA が基本 ISA の aarch64 でも既定は縮約しない（<span class="mono">fpr</span> ラッパが効く）。未検証: MSVC、他バージョン、実機 aarch64、AVX2/NEON ベクトル経路の動的比較。</li>
+<li><strong>検証の速さ</strong>は最速の C ビルドを約 10% 上回るが、これはビルドオプションだけで生じるばらつきの内側である。擁護できる主張は「C と同等」であって順位ではない。</li>
+<li><strong>FALCON-1024</strong> は書き方の差については低volume（35万本、1 件）だが、縮約の結果はここでも再現する（6万本中 6 本）。</li>
+</ul>
+
+<span class="secnum">10 — 提言</span>
+<h2>FIPS 206 がすべきこと</h2>
+<p>FIPS 206 がビット一致 KAT を求めるなら：</p>
+<ol>
+<li><strong><span class="mono">FP_CONTRACT</span> を規範として off と書く。</strong>これを最初に置く。§05 がその代価である ― 旗ひとつで 10 万本中 12 本の食い違いと 8 本の秘密鍵。<span class="mono">-Ofast</span> と <span class="mono">-ffast-math</span> はどちらもその旗を含む。いま参照実装を守っているのは型安全イディオムの文書化されていない副作用であり、偶然は仕様ではない。</li>
+<li><strong>最後の 2 回だけの修正は修正でない、と書く。</strong>§04 は最初の 2 回の事象から鍵を復元する。2024/1709 §5 があの位置を無害とみなす理由は成り立たないので、その理由に依拠した対策には別の根拠が要る。</li>
+<li><strong>浮動小数点環境が対象かを書く。</strong>周囲の IEEE-754 丸め方向以外はすべて適合している署名器は、ノルム条件を満たしたまま<em>検証に落ちる</em>署名を出す ― FE_UPWARD / FE_DOWNWARD で 200 本中 0 本が有効。これは決定性ではなく正当性の要件で、現行のどの本文にも書かれていない。</li>
+<li><strong>書き方を固定する</strong> ― 複素除算・<span class="mono">D11</span>・最下段 <span class="mono">ffSampling</span> を明示するか、より良くは ePrint 2024/1709 §7.1 の構造的修正（中心を <span class="mono">floor</span> でなく <span class="mono">round</span> でサンプルし、‖(g,−f)‖² を奇数に制限）を採る。後者は感受性そのものを除く。ただし<em>両方の part を同じ条項で義務づける</em>こと ― <span class="mono">round</span> にすると <span class="mono">q</span> が奇数なので最初の 2 回は無条件に閉じるが、最後の 2 回（最も安い鍵復元位置）は以前とまったく同じだけ露出したままになる。また現状の C 鍵生成が ‖(g,−f)‖² を偶数に強制しているので、そのパリティ条件の緩和も要る。</li>
+<li><strong><span class="mono">fpr_inv_sigma</span> を全精度で公表する</strong> ― 丸めた σ から導かせず、中間値が KAT の対象かを述べる。</li>
+<li><strong>σ_min の ε を明記する</strong>、あるいは導出を。</li>
+<li><strong>SamplerZ のバイト組み立て規約を</strong>ベクタと並べて記す。</li>
+</ol>
+
+<footer>
+<p><strong>全て再現できる。</strong>各図は名前付きスクリプトが生成し、注記のある所を除き C コンパイラなしで再検証できる。</p>
+<p class="mono">julia --project=falcon -e 'using Pkg; Pkg.test()'  ·  「byte for byte」テストセット<br>
+julia … falcon/scripts/divergence_rate.jl 100 1000  ·  §03<br>
+julia … falcon/scripts/event_solve.jl  ·  §04、事象だけからの鍵復元<br>
+julia … falcon/scripts/window.jl all 200 1200  ·  §04、窓の両端<br>
+sh falcon/scripts/cref_contract.sh 100000  ·  §05、C 参照実装の 2 ビルド<br>
+sh falcon/scripts/bench_all.sh  ·  §08</p>
+<p>本文：<span class="mono">docs/paper.md</span> · 測定記録：<span class="mono">docs/debug_log.md</span> #046–#071 · NIST 意見草案：<span class="mono">docs/nist_comment_draft.md</span>。テスト 61708 件合格。</p>
+</footer>
+
+</div>
+</div>

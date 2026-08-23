@@ -193,9 +193,9 @@ publish `h = g/f mod q`.
 
 [Py-ref] scripts/pyref/falcon.py:357-390 (`keygen`)
 """
-function falcon_keygen(n::Integer, randombytes)
+function falcon_keygen(n::Integer, randombytes; sampler::Symbol = :cdt)
     p = params(n)
-    f, g, F, G = ntru_gen(n, randombytes; q = p.q)
+    f, g, F, G = ntru_gen(n, randombytes; q = p.q, sampler = sampler)
     sk = expand_privkey(Int.(f), Int.(g), Int.(F), Int.(G), p)
     fq = Int[mod(c, p.q) for c in f]
     gq = Int[mod(c, p.q) for c in g]
@@ -308,7 +308,12 @@ function falcon_sign(sk::FalconPrivateKey, message, randombytes;
 
     for _ in 1:max_attempts
         s1, s2 = sample_preimage(sk, point, randombytes)
-        nrm = sqnorm(s1, s2)
+        # `sqnorm_machine` rather than `sqnorm`: same value, but no branch on
+        # the coefficients and no `BigInt` (poly.jl, docs/constant_time.md).
+        # The candidate being tested here may be *rejected* and never
+        # published, so its coefficients are secret in a way the accepted
+        # signature's are not.
+        nrm = sqnorm_machine(s1, s2)
         nrm <= p.sig_bound || continue                 # too long: resample
         sig = encode_signature(salt, s2, p.logn, p.sig_bytes)
         sig === nothing && continue                    # does not fit: resample
