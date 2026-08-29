@@ -16,7 +16,11 @@
 3. **訂正ボックス** ― いったん主張し、あとで反証・撤回・機構の付け替えをした箇所は、地の文に埋めず独立して「初期主張 → 反証/査読 → 修正後」の三段で示す。黙って最終結論だけを書かない。
 4. **脅威モデル注記** ― 鍵復元・偽造を述べる節は、必ず「攻撃者が何を入手できる前提か」を見出し直下に置く。とくに #071 系は、任意の FALCON 利用者への汎用遠隔攻撃**ではない**ことを明記する。
 
-> **一次資料の扱いについて（要確認①）**: debug_log 末尾の「完了時点のまとめ」節は一部が古いまま更新されていない（例：「署名バイトの再現はまだできていない」とあるが、これは #050 の成功と矛盾する）。本資料は**各エントリ本文を正**とし、末尾まとめ節に引きずられないようにしている。
+> **一次資料内の食い違いの検証（①解決済み）**: debug_log 末尾の「完了時点のまとめ／次にやるとしたら」節は、「署名バイトの再現はまだできていない（#031 の続き）」と書いている。**これは #031 時点で書かれたスナップショットで、その後更新されていない**（当該節は #031 を「次にやること」として挙げ、#048/#050 以降を一切知らない）。実際には **#050（分岐版 `cschedule`）で署名バイトを 25/25 再現済み**であり、これが後発の権威ある状態である。整理すると ― main（仕様書忠実な綴り）ではバイト再現しない（設計どおり別綴り）、分岐版 cschedule では #050 で再現した ― の二つが両立する。**本資料は各エントリ本文（とくに #050）を正とする**。
+>
+> **言語（②確定）**: 本資料は日本語のみで作成する（英語版は作らない）。既存の `paper.md`（英語）はそのまま。
+>
+> **文献との突き合わせ（③実施済み）**: 新規性の判定は §9.2 で外部文献と照合した。原典 PDF（IACR/Springer 等）は実行環境の egress ポリシーで遮断されているため、確認できた範囲と未確認の範囲を §9.2 に明記している。
 
 ---
 
@@ -290,7 +294,7 @@ Deep Research の結果、**FIPS 206（FN-DSA の正式規格）はまだ発行�
 - 機構：`ffsampling_fft` は z1（前半）を先に引き、`t0 ← t0+(t1−z1)·l10` で補正してから z0（後半）を引く。**z0 の中心は上位 l10 補正を経由するので最下段の丸め差がそこに乗る**。最後の2回は累積最大 → 32倍高い条件付き発散。これが §6.1 の非対称性の説明。
 - A2 は最初の2回の中心を**厳密に0**しか動かさない（l10 補正が未だ入らないため）。よって A2 の発散は構造的に最後の2回に限られる。
 
-「『理由不明』と書かれた箇所は狙い目」。
+「『理由不明』と書かれた箇所は狙い目」。（**要確認**：論文 §6.1 が非対称性を明示的に「理由不明」としているかは原典 PDF が egress 遮断で未確認。§9.2 の文献突き合わせ参照。この機構説明を「論文が open とした問いの解決」として出すなら、投稿前に §6.1 の文言を直接引用して確定すること。）
 
 ## 5.6 精度→漏洩率の法則 ― 6桁差が「構造」を裏づける `[#059]`
 
@@ -524,7 +528,41 @@ a_iᵀ S a_i ≡ 0 (mod q),   S = sym(f f'ᵀ),   rank ≤ 2
   - 盲目 which-call を rank-2 リフトで解き、クエリコスト則（盲目 O(n²)）として定式化 `[#075]`。
   - 鍵生成を触らない対策 rational snapping `[#064]`。
 
-> **注（要確認②）**：上記「新規」の判定は debug_log 内の記述にもとづく。最終的な新規性の主張は、投稿前に最新の文献（2024/1709 の改訂版、後続研究、[PKKK24] 等）と再突き合わせて確定すること。debug_log 自身も #055・#067 で「新規と思ったものが既知だった」経験を繰り返している。
+### 文献突き合わせの結果（2026-08-27 実施）
+
+新規性の判定を外部文献と照合した。**原典 PDF（eprint.iacr.org / link.springer.com / normalesup.org / iacr.org スライド）はすべて実行環境の egress ポリシーで遮断**されているため、到達できた二次情報（ResearchGate/ACM/dblp の要約、Web 検索が索引した本文断片）と、**到達できた一次的資料（`github.com/algorand/falcon` の README・config.h、`github.com/pornin/rust-fn-dsa` の README）**で照合した。確認できた点と未確認の点を分けて記す。
+
+**✅ 外部で裏づけが取れた点（新規性境界を支持）**
+
+| 主張 | 外部からの確認 | 出典 |
+|:--|:--|:--|
+| 論文の核（サンプラを同一入力で2回呼ぶと、数千回に1回、構造化された差で2つの格子点が出て鍵を露呈）は既知 | 検索要約が同機構・率を明示 | ResearchGate/ACM 要約 |
+| 論文の対策＝NewSamplerZ（`floor`→`round`）＋ ‖(g,−f)‖ を奇数に | 「changing floor to rounding … restricting ‖(g,−f)‖₂ to be odd」を確認。#061/#067 と一致 | 検索要約 |
+| **論文の鍵復元は差ベクトル／Nguyen–Regev hidden parallelepiped 統計を使う** | 「adapts the hidden parallelepiped attack (Nguyen–Regev, EC2006)」。→ #069/#073 の**事象のみ・線形系（差ベクトル不使用）は別経路** | 検索要約 |
+| **論文は最初の2回の発散を「短い格子ベクトル、多数得ても鍵回復には不十分と考えられる」として退けている** | 「produces a fairly short vector … even obtaining many such vectors is not believed to enable a key recovery attack」を確認。→ #065/#069 の「最初の2回でも公開線形形式として鍵が出る」はこの退けを**正面から覆す** | 検索要約 |
+| 論文の主たる摂動源は Rowhammer ビット反転／サイドチャネル（~17万トレースで 30分） | 「single Rowhammer bit flip … 170,000 side-channel traces … thirty minutes」。→ #071 の「同一参照実装の2通りの適合ビルド差」は**別の摂動源** | 検索要約 |
+| **参照実装は FALCON_FMA の署名変化を「安全性に影響しない」と自己評価している**（#074 が反証した主張の実在） | algorand README: 「Occasionally (but rarely), use of FALCON_FMA will change the keys and/or signatures … **has no bearing on the security of normal usage**」、config.h: 「FALCON_FMA should be disabled, especially if native FP is enabled」 | `github.com/algorand/falcon` |
+| 「非決定性は壊滅的」という警告文の実在（#012） | README:「robust determinism … to prevent a potential **catastrophic security failure** in the deterministic mode」（FPEMU 推奨） | 同上 |
+| 実運用実装が native f64 を「strict IEEE-754 だから安全」として使い、FMA/`-ffp-contract` への警告を持たない（#071/#074 の「誰も選んでいない差」を補強） | Pornin rust-fn-dsa README: x86_64/aarch64 で native f64 使用、FMA/contract の危険に言及なし | `github.com/pornin/rust-fn-dsa` |
+| Mitaka は連続摂動で敏感でない（#060） | 「Mitaka … key recovery requires much more traces … different lattice Gaussian samplers」と整合 | 検索要約 |
+
+**⚠️ 未確認（原典本文が取得できず、debug_log の記述に依拠）**
+
+- §6.1 の非対称性を論文が「理由不明」と明記しているか（#058 の前提）。検索要約は「機構を identify した」とも読め、**断定できない**。→ #058 の「論文が open とした問いを説明した」という言い方は、原典 PDF で §6.1 の文言を確認してから確定すること。
+- footnote 6 の Mitaka/Antrag に関する正確な文言（#060）。Mitaka の耐性自体は上表で整合。
+- 盲目 which-call を rank-2 リフトで解く手法（#075）の先行研究の有無。**該当する先行研究は見つからなかったが、無いことの証明にはならない**。
+- rational snapping（鍵生成を触らない対策、#064）に相当する先行提案の有無。論文の対策は奇数ノルム＝鍵生成変更を要するので、鍵生成不要版は**新規の可能性が高い**が未確認。
+- 2025–2026 の後続研究に #069/#071/#075 と重なるものが無いか。整数ガウスサンプラの電力解析（共分散スペクトル分解、22万トレースで ~30分）等の**サイドチャネル系**の進展は見つかったが、**「2通りの適合ビルド差だけで鍵復元＋偽造」や「事象のみの線形系」に一致する公表研究は見当たらなかった**（同上、無いことの証明ではない）。
+
+**結論**：新規と判断していた5点のうち、**#069/#073（事象チャネル）・#071/#072/#074（適合ビルド差＋偽造、および参照実装の過小評価の反証）・#064（鍵生成不要対策）は、外部文献との境界が支持された**。**#058（§6.1 の「理由不明」の帰属）と #075（盲目 which-call の先行性）は、原典 PDF 入手後に最終確認が必要**。投稿前に PDF が読める環境で §5・§6.1・§7・footnote 6 の文言を直接引用して確定すること。
+
+**参照した外部資料**：
+- ePrint 2024/1709「Do Not Disturb a Sleeping Falcon」(Lin, Tibouchi, Yu, Zhang, EUROCRYPT 2025) ― 要約のみ（PDF は egress 遮断）。dblp: `journals/iacr/LinTYZ24`。IACR Artifact Archive: `artifacts.iacr.org/eurocrypt/2025/a4/`（未取得）。
+- `github.com/algorand/falcon`（README.txt / config.h の FALCON_FMA・FPEMU 記述）。
+- `github.com/pornin/rust-fn-dsa`（native f64 のプラットフォーム別方針）。
+- 関連：Improved Power Analysis Attacks on Falcon (ePrint 2023/224)、Mitaka (EUROCRYPT 2022)、hidden parallelepiped (Nguyen–Regev, EUROCRYPT 2006 / Ducas–Nguyen, ASIACRYPT 2012)。
+
+> **注意**：本照合は二次情報と到達できた一次的資料に基づく。debug_log 自身も #055・#067 で「新規と思ったものが既知だった」誤りを繰り返しており、原典 PDF での最終確認を省略しないこと。上表の「別経路／別の摂動源」という判定も、PDF で論文の攻撃射程を直接読んで裏取りすること。
 
 ## 9.3 FIPS 206 への含意
 
